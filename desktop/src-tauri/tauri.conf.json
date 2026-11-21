@@ -42,6 +42,7 @@
       "icon-build/Assets.car": "Assets.car",
       "icon-build/NCB.icns": "NCB.icns",
       "../../tools/mod_file_policy.py": "tools/mod_file_policy.py",
+      "../../tools/artifact_copy.py": "tools/artifact_copy.py",
       "bundle-source/": "source/"
     },
     "icon": [
