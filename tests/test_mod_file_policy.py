@@ -217,7 +217,12 @@ class MetadataTests(unittest.TestCase):
     def test_bundled_preflight_contains_shared_policy(self):
         repo = Path(__file__).resolve().parents[1]
         config = json.loads((repo / 'desktop/src-tauri/tauri.conf.json').read_text())
-        self.assertEqual(config['bundle']['resources']['../../tools/mod_file_policy.py'], 'tools/mod_file_policy.py')
+        resources = config['bundle']['resources']
+        self.assertEqual(resources['../../tools/mod_file_policy.py'], 'tools/mod_file_policy.py')
+        # preflight imports mod_file_policy, which imports artifact_copy. Every
+        # module in that chain has to be shipped next to preflight.py or the
+        # packaged workbench fails with ModuleNotFoundError on first use.
+        self.assertEqual(resources['../../tools/artifact_copy.py'], 'tools/artifact_copy.py')
 
     def test_generated_lwjgl_overlay_filters_only_metadata(self):
         jar = self.root / 'lwjgl-ios.jar'
