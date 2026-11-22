@@ -61,6 +61,130 @@ test("quick build defaults off and persists keyboard changes", async ({ page }) 
   await settings.click();
   await expect(quickBuild).not.toBeChecked();
 });
+
+test("build parallelism is adjustable and defaults to automatic", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const slider = page.getByRole("slider", { name: "构建并行度" });
+  await expect(slider).toHaveValue("0");
+  await expect(slider).toHaveAttribute("aria-valuetext", "自动");
+  await expect(page.getByText("自动", { exact: true }).last()).toBeVisible();
+  // A controlled range only updates through the element's own keyboard handling,
+  // so drive it the way a user would rather than assigning the value.
+  await slider.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(slider).toHaveAttribute("aria-valuetext", "1 线程");
+  let saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ncl.builder.v2") || "{}"),
+  );
+  expect(saved.aotParallelism).toBe(1);
+  await page.reload();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await expect(slider).toHaveValue("1");
+  // Returning to 0 clears the override so the build keeps its own default.
+  await slider.focus();
+  await page.keyboard.press("ArrowLeft");
+  saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ncl.builder.v2") || "{}"),
+  );
+  expect(saved.aotParallelism).toBeUndefined();
+});
+
+test("the parallelism setting travels with the build request", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const calls: { command: string; args: Record<string, unknown> }[] = [];
+    localStorage.setItem(
+      "ncl.onboarding.v1",
+      JSON.stringify({
+        version: 1,
+        accepted: true,
+        storageRoot: "/fixture",
+        completed: true,
+      }),
+    );
+    Object.assign(window, {
+      isTauri: true,
+      __parallelismCalls: calls,
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: Record<string, unknown>) => {
+          calls.push({ command, args });
+          if (command === "default_workspace") return "/fixture/source";
+          if (command === "system_accent") return "#3478D4";
+          if (command === "account_action")
+            return {
+              configured: true,
+              verified: true,
+              profile: { id: "fixture", name: "Fixture" },
+              verifiedAt: Math.floor(Date.now() / 1000),
+              verifiedUntil: Math.floor(Date.now() / 1000) + 3600,
+            };
+          if (command !== "workbench_action") return null;
+          if (args.action === "bootstrap")
+            return {
+              workspace: "/fixture/source",
+              config: "/fixture/config.json",
+              exportOptions: "/fixture/Export.plist",
+              output: "/fixture/builds",
+              configFields: {},
+              jobs: [],
+            };
+          if (args.action === "dependencies")
+            return { ready: true, checkedAt: "", libraries: [] };
+          if (args.action === "start")
+            return {
+              id: "b".repeat(32),
+              name: "parallelism build",
+              state: "queued",
+              stage: "validate",
+              startedAt: "2026-11-22T00:00:00Z",
+              updatedAt: "2026-11-22T00:00:00Z",
+              build: "/fixture/builds/build-1",
+              folder: "/fixture/jobs/1",
+              error: "",
+              request: args.request,
+            };
+          return null;
+        },
+      },
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const slider = page.getByRole("slider", { name: "构建并行度" });
+  await slider.focus();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await expect(slider).toHaveAttribute("aria-valuetext", "2 线程");
+
+  await page.getByRole("button", { name: "构建 IPA", exact: true }).first().click();
+  await importReport(page);
+  await page.getByRole("button", { name: "下一步", exact: true }).click();
+  await page.getByRole("button", { name: "下一步", exact: true }).click();
+  await page.getByRole("button", { name: "5 确认构建", exact: true }).click();
+  await page
+    .getByRole("button", { name: "构建 IPA", exact: true })
+    .last()
+    .click();
+
+  const started = await page.evaluate(() =>
+    (
+      window as unknown as {
+        __parallelismCalls: {
+          command: string;
+          args: { action?: string; request?: { aotParallelism?: number } };
+        }[];
+      }
+    ).__parallelismCalls.filter(
+      (call) => call.command === "workbench_action" && call.args.action === "start",
+    ),
+  );
+  expect(started).toHaveLength(1);
+  expect(started[0].args.request?.aotParallelism).toBe(2);
+});
 test("client grading filters combine with categories and keep selection independent", async ({
   page,
 }) => {

@@ -2241,6 +2241,27 @@ code {
   accent-color: var(--accent);
 }
 
+.aot-parallelism {
+  width: 100%;
+  max-width: 300px;
+  margin-left: auto;
+  min-width: 180px;
+}
+
+.aot-parallelism input[type="range"] {
+  flex: 1;
+  min-width: 100px;
+  accent-color: var(--accent);
+}
+
+.aot-parallelism-value {
+  min-width: 52px;
+  text-align: right;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
 .advanced {
   margin-top: var(--space-4);
   padding: 9px 11px;

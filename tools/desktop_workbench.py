@@ -521,6 +521,10 @@ def validate_request(request):
     if request.get('loaderVersion') not in (None, '', 'auto') and request['loaderVersion'] not in verified_loaders(read_json(workspace / 'compiler/fabric.lock.json')):
         raise ValueError('请选择已验证的 Fabric Loader 版本')
     if not isinstance(request.get('quickBuild', False), bool): raise ValueError('快速构建选项必须为布尔值')
+    parallelism = request.get('aotParallelism')
+    if parallelism is not None:
+        # Validated here so a bad value fails before a job is queued, not mid-build.
+        aot_parallelism(parallelism, bool(request.get('quickBuild', False)))
     recommended = request.get('recommendedResources')
     if recommended is not None:
         if (not isinstance(recommended, list) or len(recommended) > 32
@@ -997,6 +1001,20 @@ def aot_heap_gib(physical_bytes=None):
     return 6
 
 
+def aot_parallelism(requested=None, quick_build=False):
+    """Native Image build parallelism: the memory-for-time knob.
+
+    Each analysis worker keeps its own working set, so a lower setting lowers the peak
+    resident size at the cost of wall-clock time. None keeps the historical default
+    (4 for a quick build, 3 otherwise); an explicit value from the settings page wins.
+    """
+    if requested is None:
+        return 4 if quick_build else 3
+    if isinstance(requested, bool) or not isinstance(requested, int) or not 1 <= requested <= 4:
+        raise ValueError('构建并行度需要在 1 到 4 之间')
+    return requested
+
+
 def compile_build(command, folder, request, build, mods, game, update, env, previous=None):
     """Run the compiler, moving to a fresh directory when a reused one is stale.
 
@@ -1006,7 +1024,10 @@ def compile_build(command, folder, request, build, mods, game, update, env, prev
     build = Path(build)
     previous = list(previous or [])
     quick_build = request.get('quickBuild', False)
-    parallelism = '4' if quick_build else '3'
+    # Native Image holds one analysis working set per worker, so the build parallelism is the
+    # knob that trades wall-clock time for resident memory. A pack whose reachable graph
+    # outgrew the heap cap can still finish at a lower setting.
+    parallelism = str(aot_parallelism(request.get('aotParallelism'), quick_build))
     version = minecraft_version(request.get('minecraftVersion'))
     for _ in range(3):
         args = [*command, 'build', '--version', version, '--loader', request['loader'], '--renderer', 'gl41',
@@ -1258,7 +1279,7 @@ def run_job(path):
         except Exception:
             pass
 
-def retry_request(job, workspace, quick_build=None):
+def retry_request(job, workspace, quick_build=None, parallelism=None):
     request = dict(job['request'])
     # A retry replays the recorded line even if the GUI no longer has a source
     # selected. Jobs recorded before multi-version support have no field and
@@ -1268,6 +1289,10 @@ def retry_request(job, workspace, quick_build=None):
         request['minecraftVersion'] = minecraft_version(recorded)
     if quick_build is not None and not request.get('existingBuild'):
         request['quickBuild'] = quick_build
+    # Lowering parallelism is the response to an analysis OOM, so a retry has to
+    # accept the current setting instead of replaying the one that just failed.
+    if parallelism is not None and not request.get('existingBuild'):
+        request['aotParallelism'] = aot_parallelism(parallelism, bool(request.get('quickBuild', False)))
     if not request.get('workspace') or not (workspace / 'bundle-manifest.json').is_file():
         return request
     previous = Path(request['workspace'])
@@ -1325,7 +1350,8 @@ def _start(request, retry=None):
     if retry:
         old = read_json(job_path(workspace, retry))
         if (old['state'] in ACTIVE or old['state'] == 'succeeded'
-                or retry_request(old, workspace, request.get('quickBuild')) != request):
+                or retry_request(old, workspace, request.get('quickBuild'),
+                                 request.get('aotParallelism')) != request):
             raise ValueError('此任务不能重试')
         if request.get('quickBuild') and old['request'].get('quickBuild'):
             job['build'] = old['build']
@@ -1448,7 +1474,8 @@ def main():
             if 'quickBuild' in request and not isinstance(request['quickBuild'], bool):
                 raise ValueError('快速构建选项必须为布尔值')
             result = start(retry_request(read_json(job_path(workspace, args.id)), workspace,
-                                         request.get('quickBuild')), args.id)
+                                         request.get('quickBuild'),
+                                         request.get('aotParallelism')), args.id)
         elif args.action == 'resolve-exclusions': result = resolve_exclusions(workspace, args.id, request.get('fields', {}))
         elif args.action in ('storage-plan', 'storage-clean'): result = storage(args.action, request.get('fields', request))
         elif args.action in ('storage-snapshot', 'storage-scan-start', 'storage-scan-status',

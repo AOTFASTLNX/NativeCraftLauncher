@@ -3206,9 +3206,20 @@ export default function App() {
                                 disabled={!native || !!busy || !!active}
                                 onClick={() =>
                                   void attempt("正在恢复构建", async () => {
-                                    // Retry keeps the recorded pack and uses the current build preference.
+                                    // Retry keeps the recorded pack and uses the current build
+                                    // preference. "自动" sends nothing, so the job keeps the
+                                    // parallelism it recorded instead of resetting it.
                                     const next = await workbench<BuildJob>(
-                                      { ...job.request, quickBuild: form.quickBuild },
+                                      {
+                                        ...job.request,
+                                        quickBuild: form.quickBuild,
+                                        ...(form.aotParallelism === undefined
+                                          ? {}
+                                          : {
+                                              aotParallelism:
+                                                form.aotParallelism,
+                                            }),
+                                      },
                                       "retry",
                                       job.id,
                                     );
@@ -3409,6 +3420,41 @@ export default function App() {
                       onChange={(event) => update({ quickBuild: event.target.checked })}
                     />
                   </label>
+                  <div className="setting-row">
+                    <div className="setting-label">
+                      <strong id="aot-parallelism-label">构建并行度</strong>
+                      <small id="aot-parallelism-description">
+                        Native Image 每个分析线程各持一份工作集。调低可降低内存峰值，编译时间相应变长。「自动」为快速构建 4，其他 3。
+                      </small>
+                    </div>
+                    <div className="setting-control aot-parallelism">
+                      <input
+                        type="range"
+                        min={0}
+                        max={4}
+                        step={1}
+                        value={form.aotParallelism ?? 0}
+                        aria-labelledby="aot-parallelism-label"
+                        aria-describedby="aot-parallelism-description"
+                        aria-valuetext={
+                          form.aotParallelism
+                            ? form.aotParallelism + " 线程"
+                            : "自动"
+                        }
+                        onChange={(event) => {
+                          const value = Number(event.target.value);
+                          update({
+                            aotParallelism: value === 0 ? undefined : value,
+                          });
+                        }}
+                      />
+                      <span className="aot-parallelism-value">
+                        {form.aotParallelism
+                          ? form.aotParallelism + " 线程"
+                          : "自动"}
+                      </span>
+                    </div>
+                  </div>
                 </div>
                 <div className="settings-group">
                   <h2>外观</h2>

@@ -44,6 +44,8 @@ export interface BuildForm {
   source: string;
   team: string;
   quickBuild?: boolean;
+  /** Native Image analysis parallelism; lower means less resident memory, more time. */
+  aotParallelism?: number;
 }
 type CompatibilityStage = "PASS" | "FAIL" | "SKIPPED" | "UNVERIFIED";
 export interface ModCompatibility {
@@ -555,6 +557,15 @@ export function restoreForm(raw: string | null): BuildForm {
   if (value.quickBuild !== undefined && typeof value.quickBuild !== "boolean")
     throw new Error("快速构建选项无效");
   result.quickBuild = value.quickBuild === true;
+  if (
+    value.aotParallelism !== undefined &&
+    (!Number.isInteger(value.aotParallelism) ||
+      value.aotParallelism < 1 ||
+      value.aotParallelism > 4)
+  )
+    throw new Error("构建并行度无效");
+  // An absent value means "use the build's own default", so it stays undefined.
+  result.aotParallelism = value.aotParallelism;
   result.loader = value.loader === "vanilla" ? "vanilla" : "fabric";
   // The line is stored as a plain preference so the next launch can default to
   // it, but the source report still overrides it for any imported pack.

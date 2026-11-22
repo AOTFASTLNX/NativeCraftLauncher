@@ -45,6 +45,22 @@ describe("executable workflow", () => {
     expect(restored.minecraftVersion).toBe("1.21.1");
     expect(buildProblems(restored, null, true)).toEqual([]);
   });
+  it("keeps an explicit build parallelism and leaves the default unset", () => {
+    expect(restoreForm(null).aotParallelism).toBeUndefined();
+    expect(
+      restoreForm(JSON.stringify({ ...form, aotParallelism: 1 }))
+        .aotParallelism,
+    ).toBe(1);
+    expect(
+      restoreForm(JSON.stringify({ ...form, aotParallelism: 4 }))
+        .aotParallelism,
+    ).toBe(4);
+    for (const bad of [0, 5, 1.5, "2"]) {
+      expect(() =>
+        restoreForm(JSON.stringify({ ...form, aotParallelism: bad })),
+      ).toThrow("构建并行度");
+    }
+  });
   it("persists optional test labels and validates labels before launch", () => {
     expect(
       restoreForm(JSON.stringify({ ...form, testVersion: "LAN-r5" }))
