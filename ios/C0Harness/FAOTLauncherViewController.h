@@ -24,6 +24,9 @@ extern NSString *const FAOTLanguageDefaultsKey;       // NSString, Minecraft loc
 /// player name, memory in GiB, control layout name and Minecraft locale.
 @property (nonatomic, copy, nullable) void (^onLaunch)(NSString *playerName, NSInteger memoryGiB, NSString *layoutName, NSString *languageCode);
 
+/// Ends the 加载中 state and shows why the runtime stopped plus a log entry point.
+- (void)runtimeFinishedSuccess:(BOOL)succeeded summary:(NSString *)summary logPath:(nullable NSString *)logPath;
+
 + (FAOTControlLayout *)activeLayout;
 
 /// Switches the visible sidebar page: game, account, resources or settings.

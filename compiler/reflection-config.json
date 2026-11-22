@@ -87,6 +87,112 @@
     ]
   },
   {
+    "name": "org.apache.logging.log4j.message.DefaultFlowMessageFactory",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "org.apache.logging.log4j.message.ParameterizedMessageFactory",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "org.apache.logging.log4j.core.impl.Log4jContextFactory",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "org.apache.logging.log4j.core.pattern.DatePatternConverter",
+    "methods": [
+      {
+        "name": "newInstance",
+        "parameterTypes": [
+          "java.lang.String[]"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "org.apache.logging.log4j.core.pattern.ThreadNamePatternConverter",
+    "methods": [
+      {
+        "name": "newInstance",
+        "parameterTypes": [
+          "java.lang.String[]"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "org.apache.logging.log4j.core.pattern.LevelPatternConverter",
+    "methods": [
+      {
+        "name": "newInstance",
+        "parameterTypes": [
+          "java.lang.String[]"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "org.apache.logging.log4j.core.pattern.LoggerPatternConverter",
+    "methods": [
+      {
+        "name": "newInstance",
+        "parameterTypes": [
+          "java.lang.String[]"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "org.apache.logging.log4j.core.pattern.MessagePatternConverter",
+    "methods": [
+      {
+        "name": "newInstance",
+        "parameterTypes": [
+          "org.apache.logging.log4j.core.config.Configuration",
+          "java.lang.String[]"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "org.apache.logging.log4j.core.pattern.LineSeparatorPatternConverter",
+    "methods": [
+      {
+        "name": "newInstance",
+        "parameterTypes": [
+          "java.lang.String[]"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "org.apache.logging.log4j.core.pattern.ThrowablePatternConverter",
+    "methods": [
+      {
+        "name": "newInstance",
+        "parameterTypes": [
+          "org.apache.logging.log4j.core.config.Configuration",
+          "java.lang.String[]"
+        ]
+      }
+    ]
+  },
+  {
     "name": "org.apache.logging.log4j.core.filter.MarkerFilter",
     "methods": [
       {
@@ -98,6 +204,27 @@
         ]
       }
     ]
+  },
+  {
+    "condition": {
+      "typeReachable": "io.netty.buffer.AbstractByteBufAllocator"
+    },
+    "name": "io.netty.buffer.AbstractByteBufAllocator",
+    "queryAllDeclaredMethods": true
+  },
+  {
+    "condition": {
+      "typeReachable": "io.netty.buffer.AdvancedLeakAwareByteBuf"
+    },
+    "name": "io.netty.buffer.AdvancedLeakAwareByteBuf",
+    "queryAllDeclaredMethods": true
+  },
+  {
+    "condition": {
+      "typeReachable": "io.netty.util.ReferenceCountUtil"
+    },
+    "name": "io.netty.util.ReferenceCountUtil",
+    "queryAllDeclaredMethods": true
   },
   {
     "name": "io.netty.channel.local.LocalServerChannel",
@@ -369,6 +496,114 @@
         "parameterTypes": [
           "net.minecraft.world.entity.boss.enderdragon.EnderDragon"
         ]
+      }
+    ]
+  },
+  {
+    "condition": {
+      "typeReachable": "io.netty.util.internal.shaded.org.jctools.queues.BaseLinkedQueueConsumerNodeRef"
+    },
+    "name": "io.netty.util.internal.shaded.org.jctools.queues.BaseLinkedQueueConsumerNodeRef",
+    "fields": [
+      {
+        "name": "consumerNode",
+        "allowUnsafeAccess": true
+      }
+    ]
+  },
+  {
+    "condition": {
+      "typeReachable": "io.netty.util.internal.shaded.org.jctools.queues.BaseLinkedQueueProducerNodeRef"
+    },
+    "name": "io.netty.util.internal.shaded.org.jctools.queues.BaseLinkedQueueProducerNodeRef",
+    "fields": [
+      {
+        "name": "producerNode",
+        "allowUnsafeAccess": true
+      }
+    ]
+  },
+  {
+    "condition": {
+      "typeReachable": "io.netty.util.internal.shaded.org.jctools.queues.BaseMpscLinkedArrayQueueColdProducerFields"
+    },
+    "name": "io.netty.util.internal.shaded.org.jctools.queues.BaseMpscLinkedArrayQueueColdProducerFields",
+    "fields": [
+      {
+        "name": "producerLimit",
+        "allowUnsafeAccess": true
+      }
+    ]
+  },
+  {
+    "condition": {
+      "typeReachable": "io.netty.util.internal.shaded.org.jctools.queues.BaseMpscLinkedArrayQueueConsumerFields"
+    },
+    "name": "io.netty.util.internal.shaded.org.jctools.queues.BaseMpscLinkedArrayQueueConsumerFields",
+    "fields": [
+      {
+        "name": "consumerIndex",
+        "allowUnsafeAccess": true
+      }
+    ]
+  },
+  {
+    "condition": {
+      "typeReachable": "io.netty.util.internal.shaded.org.jctools.queues.BaseMpscLinkedArrayQueueProducerFields"
+    },
+    "name": "io.netty.util.internal.shaded.org.jctools.queues.BaseMpscLinkedArrayQueueProducerFields",
+    "fields": [
+      {
+        "name": "producerIndex",
+        "allowUnsafeAccess": true
+      }
+    ]
+  },
+  {
+    "condition": {
+      "typeReachable": "io.netty.util.internal.shaded.org.jctools.queues.LinkedQueueNode"
+    },
+    "name": "io.netty.util.internal.shaded.org.jctools.queues.LinkedQueueNode",
+    "fields": [
+      {
+        "name": "next",
+        "allowUnsafeAccess": true
+      }
+    ]
+  },
+  {
+    "condition": {
+      "typeReachable": "io.netty.util.internal.shaded.org.jctools.queues.MpscArrayQueueConsumerIndexField"
+    },
+    "name": "io.netty.util.internal.shaded.org.jctools.queues.MpscArrayQueueConsumerIndexField",
+    "fields": [
+      {
+        "name": "consumerIndex",
+        "allowUnsafeAccess": true
+      }
+    ]
+  },
+  {
+    "condition": {
+      "typeReachable": "io.netty.util.internal.shaded.org.jctools.queues.MpscArrayQueueProducerIndexField"
+    },
+    "name": "io.netty.util.internal.shaded.org.jctools.queues.MpscArrayQueueProducerIndexField",
+    "fields": [
+      {
+        "name": "producerIndex",
+        "allowUnsafeAccess": true
+      }
+    ]
+  },
+  {
+    "condition": {
+      "typeReachable": "io.netty.util.internal.shaded.org.jctools.queues.MpscArrayQueueProducerLimitField"
+    },
+    "name": "io.netty.util.internal.shaded.org.jctools.queues.MpscArrayQueueProducerLimitField",
+    "fields": [
+      {
+        "name": "producerLimit",
+        "allowUnsafeAccess": true
       }
     ]
   }

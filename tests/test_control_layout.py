@@ -67,12 +67,12 @@ class ControlLayoutStorageTests(unittest.TestCase):
 
 
 class ControlInputTests(unittest.TestCase):
-    def test_input_is_resolved_at_runtime_not_linked(self):
-        self.assertIn('dlsym(RTLD_DEFAULT, "faot_glfw_enqueue")', BRIDGE_M)
-        self.assertIn('dlsym(RTLD_DEFAULT, "glfwGetCurrentContext")', BRIDGE_M)
+    def test_input_target_is_supplied_by_surface(self):
+        self.assertIn('[controls setInputWindow:self.handle enqueue:(void *)faot_glfw_enqueue]', SURFACE)
+        self.assertNotIn('glfwGetCurrentContext', BRIDGE_M)
 
     def test_input_without_a_game_surface_is_a_no_op(self):
-        self.assertIn("if (!window || !enqueue) return NO;", BRIDGE_M)
+        self.assertIn("if (!window || !inputEnqueue) return NO;", BRIDGE_M)
 
     def test_held_keys_are_released_once(self):
         self.assertIn("[self.heldKeys removeAllObjects]", VIEW_M)
@@ -89,6 +89,15 @@ class ControlInputTests(unittest.TestCase):
 
 
 class ControlEditorTests(unittest.TestCase):
+    def test_undo_implementation_is_in_both_xcode_targets(self):
+        for project_path in ("ios/C0Harness/C0Harness.xcodeproj/project.pbxproj",
+                             "ios/NCLDemo/NCLDemo.xcodeproj/project.pbxproj"):
+            project = (ROOT / project_path).read_text(encoding="utf-8")
+            for prefix in ("E", "F"):
+                build_id = prefix + "000000000000000000000E"
+                self.assertRegex(project, rf"{build_id} /\* CustomControlsViewController\+UndoManager.m in Sources \*/ = ")
+                self.assertRegex(project, rf"{build_id} /\* CustomControlsViewController\+UndoManager.m in Sources \*/,")
+
     def test_editor_is_the_ported_amethyst_controller(self):
         self.assertIn("@interface FAOTControlEditorViewController : CustomControlsViewController",
                       (ROOT / "ios/C0Harness/FAOTLauncherViewController.h").read_text(encoding="utf-8"))

@@ -17,6 +17,21 @@ import desktop_workbench as w
 from mcfao import instance_files, device_xcode
 
 
+def isolated_storage(root):
+    """Point every storage role at the test's own tree.
+
+    The suite may be started from a shell that exports MCFAO_STORAGE_CONFIG for
+    a real regression run; inheriting it would send workbench state into shared
+    jobs/cache directories. Drop those variables and declare all four roles in
+    a throwaway configuration so nothing falls back to the developer's own
+    storage.json either.
+    """
+    root = Path(root)
+    settings = root / 'storage.json'
+    settings.write_text(json.dumps({role: str(root / role) for role in ('cache', 'builds', 'jobs', 'rust')}))
+    return patch.dict(os.environ, {'MCFAO_STORAGE_CONFIG': str(settings)}, clear=False)
+
+
 def jar_bytes(mod_id='workbench_fixture', depends=None):
     data = io.BytesIO()
     with zipfile.ZipFile(data, 'w') as z:
@@ -78,7 +93,7 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(w.read_json(filtered_game/'import.json')['staticAotExclusions'], plan['mods'])
 
     def test_exclusion_decision_requires_current_challenge(self):
-        job_dir = self.root/'artifacts/desktop-jobs'/('a'*32)
+        job_dir = self.root/'jobs'/('a'*32)
         job_dir.mkdir(parents=True)
         job_path = job_dir/'job.json'
         w.write_json(job_path, {'id':'a'*32, 'state':'awaiting-exclusions', 'exclusionChallenge':{'id':'challenge-1'}})
@@ -136,6 +151,14 @@ class WorkbenchTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        inherited = patch.dict(os.environ, {}, clear=False)
+        inherited.start()
+        for name in [name for name in os.environ if name.startswith('MCFAO_')]:
+            del os.environ[name]
+        self.addCleanup(inherited.stop)
+        storage = isolated_storage(self.root)
+        storage.start()
+        self.addCleanup(storage.stop)
         cache = patch('mod_download_cache.cache_path', return_value=self.root / 'compiler-cache')
         cache.start()
         self.addCleanup(cache.stop)
@@ -645,10 +668,15 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual((output / 'App.app/instance-seed/config/a.json').read_text(), 'fixture configuration')
 
     def test_storage_plan_and_clean_use_the_shared_data_root(self):
+        # The legacy shared-root cleanup only runs when no custom storage
+        # configuration is in force. Point the configuration at a path that does
+        # not exist so a developer's own storage.json cannot select the other branch.
         data = self.root / 'data'
         (data / 'cache/upstream').mkdir(parents=True)
         (data / 'cache/upstream/jdk.tar.gz').write_bytes(b'x' * 2048)
-        with patch.object(w.cleanup_storage, 'default_data_root', return_value=data):
+        absent = self.root / 'no-storage.json'
+        with patch.dict(os.environ, {'MCFAO_STORAGE_CONFIG': str(absent)}), \
+                patch.object(w.cleanup_storage, 'default_data_root', return_value=data):
             plan = w.storage('storage-plan', {})
             self.assertEqual(plan['status'], 'STORAGE_PLAN')
             self.assertIn('cache', [group['id'] for group in plan['groups']])

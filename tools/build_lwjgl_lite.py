@@ -12,12 +12,14 @@ from pathlib import Path
 from bootstrap_toolchain import sha256
 from build_method_splitter import gradle_asm
 from capture import ROOT,capture
-from graphics_common import register_tree
+from graphics_common import (BRIDGE_MODULES, expected_lwjgl_version, owned_client_references,
+                             register_tree, select_lwjgl_modules)
 from lwjgl_codegen import generate_callbacks,generate_jni,parse_natives,CALLBACKS
 from run_b0_reference import sandbox_policy
 from fetch_stb import verify_sources
 from build_glfw_lite import exported_symbols, validate_input_exports
 from mod_file_policy import content_paths, is_metadata
+from game_versions import DEFAULT_VERSION, get_profile
 
 
 def filter_overlay_metadata(jar):
@@ -42,27 +44,73 @@ def main(argv=None):
     p.add_argument("--glfw-library",type=Path,default=ROOT/"artifacts/graphics/glfw-sim-01/libglfw.dylib")
     p.add_argument("--prepared",type=Path,default=ROOT/"artifacts/b0/prepared-04",
                    help="prepared client directory containing result.json")
+    p.add_argument("--owned-client",type=Path,
+                   help="verified owned-client directory; use instead of --prepared when no B0 manifest exists")
+    p.add_argument("--mapped-client",type=Path,
+                   help="client jar in the runtime namespace; recorded so a remapped line is traceable")
+    p.add_argument("--minecraft-version",default=None,
+                   help="selected Minecraft line; must match the prepared record, defaults to it")
     args=p.parse_args(argv)
+    if args.owned_client is not None and args.prepared is not None:
+        p.error("choose either --prepared or --owned-client, not both")
+    if args.owned_client is not None:
+        # Bounded helper scope: build the bridge from the verified owned-client
+        # jars when the full B0 preparation has not run yet.
+        minecraft_version=args.minecraft_version or DEFAULT_VERSION
+        try:
+            references=owned_client_references(args.owned_client,minecraft_version)
+        except (OSError,ValueError) as error:
+            p.error(str(error))
+        manifest={"minecraftVersion":minecraft_version,"referenceLibraries":references,
+                  "ownedClient":str(Path(args.owned_client).resolve())}
+    else:
+        manifest=json.loads((Path(args.prepared)/"result.json").read_text())
+        minecraft_version=manifest.get("minecraftVersion",DEFAULT_VERSION)
+        if args.minecraft_version is not None:
+            if args.minecraft_version != minecraft_version:
+                p.error("prepared inputs are Minecraft "+str(minecraft_version)+", selected "+args.minecraft_version)
+            minecraft_version=args.minecraft_version
+    try:
+        profile=get_profile(minecraft_version)
+        # The LWJGL release follows the selected Minecraft line (26.1.2 -> 3.4.1,
+        # 1.21.1 -> 3.3.3). Natives jars are host-only and never enter the bridge.
+        modules=select_lwjgl_modules(manifest["referenceLibraries"],profile.version)
+        lwjgl_version=expected_lwjgl_version(profile.version)
+    except ValueError as error:
+        p.error(str(error))
+    libraries={}
+    for module,entry in modules.items():
+        path=Path(entry["path"])
+        if not path.is_file() or sha256(path)!=entry["sha256"]:
+            p.error("Reference LWJGL input changed: "+str(path))
+        libraries[module]=path
+    if set(libraries)!=set(BRIDGE_MODULES):p.error("Hash-verified LWJGL core/GLFW/STB/OpenAL inputs required")
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=False)
     home=(cache_path('toolchains/graalvm-25.0.2/graalvm-community-openjdk-25.0.2+10.1/Contents/Home')).resolve(strict=True)
-    manifest=json.loads((Path(args.prepared)/"result.json").read_text())
-    libraries={}
-    for entry in manifest["referenceLibraries"]:
-        path=Path(entry["path"])
-        if path.name in ("lwjgl-3.4.1.jar","lwjgl-glfw-3.4.1.jar","lwjgl-stb-3.4.1.jar","lwjgl-openal-3.4.1.jar"):
-            if sha256(path)!=entry["sha256"]:p.error("Reference LWJGL input changed: "+str(path))
-            libraries[path.stem.split('-3.4')[0]]=path
-    if set(libraries)!={"lwjgl","lwjgl-glfw","lwjgl-stb","lwjgl-openal"}:p.error("Hash-verified LWJGL 3.4.1 core/GLFW/STB/OpenAL inputs required")
-    sources=sorted(p for p in content_paths(ROOT/"compiler/lwjgl-lite/src") if p.suffix==".java")
+    source_root=ROOT/"compiler/lwjgl-lite/src"
+    selected={p.relative_to(source_root):p for p in content_paths(source_root) if p.suffix==".java"}
+    version_root=ROOT/"compiler/lwjgl-lite"/("src-"+lwjgl_version)
+    if version_root.is_dir():
+        selected.update({p.relative_to(version_root):p for p in content_paths(version_root) if p.suffix==".java"})
+    sources=[selected[key] for key in sorted(selected)]
     steps=[]
     def step(command,name,cwd=ROOT):
         r=capture(list(map(str,command)),out/name,180,cwd=cwd);steps.append(r)
         if r["exitCode"]:raise RuntimeError(name+" failed: "+(out/name/"stderr.log").read_text()[-2500:])
         return r
     result={"status":"BLOCKED","gateC0":"BLOCKED","inputsSHA256":{str(v):sha256(v) for v in libraries.values()},
+            "minecraftVersion":profile.version,"lwjglVersion":lwjgl_version,
+            "prepared":str(Path(args.prepared).resolve()) if args.owned_client is None else None,
+            "ownedClient":str(Path(args.owned_client).resolve()) if args.owned_client else None,
             "sourcesSHA256":{str(v.relative_to(ROOT)):sha256(v) for v in [*sources,ROOT/"compiler/lwjgl-lite/Overlay.java",ROOT/"ios/lwjgl-lite/core.c",ROOT/"ios/lwjgl-lite/stb_images.c",ROOT/"compiler/stb.lock.json",ROOT/'interop/graphics/LwjglProbe.java',Path(__file__),ROOT/"tools/lwjgl_codegen.py"]},
             "callbackABIs":[name for name,_ in CALLBACKS],"slotsPerABI":32,
             "scope":"JNI/GLFW and bounded memory image STB bridge; no game renderer, Minecraft boot or device acceptance"}
+    if args.mapped_client is not None:
+        mapped=Path(args.mapped_client).resolve(strict=True)
+        result["mappedClient"]=str(mapped);result["mappedClientSHA256"]=sha256(mapped)
+    probe_root=ROOT/"interop/graphics"/("1211" if profile.requires_remapping else "")
+    result["sourcesSHA256"].update({str(path.relative_to(ROOT)):sha256(path)
+            for path in (probe_root/"WindowProbe.java",probe_root/"NativeImageProbe.java") if path.is_file()})
     try:
         stb=verify_sources();result["stbSourcesSHA256"]={f.name:sha256(f) for f in sorted(stb.glob('*.h')) if not is_metadata(f.name)}
         classes=out/"overlay-classes";classes.mkdir()
@@ -116,25 +164,30 @@ def main(argv=None):
             references=[]
             for entry in manifest["referenceLibraries"]:
                 path=Path(entry["path"])
+                if args.mapped_client is not None and path.name==profile.version+".jar":continue
                 if path in libraries.values() or any(s in path.name for s in ("fabric-loader-","sponge-mixin-","intermediary-")):continue
                 if sha256(path)!=entry["sha256"]:raise RuntimeError("Window reference dependency changed: "+str(path))
                 references.append(path)
+            if args.mapped_client is not None:references.insert(0,mapped)
             cp=os.pathsep.join(map(str,[test_classes,*overlay_libraries,*references]))
-            step([home/"bin/javac","-proc:none","-cp",cp,"-d",test_classes,ROOT/"interop/graphics/WindowProbe.java"],"window-probe-compile")
             policy=out/"window-probe.sb"
             policy.write_text(sandbox_policy(out,home,references))
-            step(["/usr/bin/sandbox-exec","-f",policy,home/"bin/java","--enable-native-access=ALL-UNNAMED","-Xmx512m",
-                  "-Duser.home="+str(out),"-Dorg.lwjgl.system.allocator=system","-Dorg.lwjgl.librarypath="+str(host),
-                  "-cp",cp,"fabricaot.graphics.WindowProbe"],"window-probe",cwd=out)
-            if "MINECRAFT_WINDOW_PROBE_PASS" not in (out/"window-probe/stdout.log").read_text():raise RuntimeError("Window probe marker missing")
-            result["hostMinecraftWindowFixture"]="PASS"
-            step([home/"bin/javac","-proc:none","-cp",cp,"-d",test_classes,ROOT/"interop/graphics/NativeImageProbe.java"],"image-probe-compile")
+            image_sources=[probe_root/"NativeImageProbe.java"]
+            if profile.requires_remapping:
+                image_sources.append(ROOT/"interop/fabric/tool/versions"/profile.version/"mcfao/aot/TexturePixels.java")
+            step([home/"bin/javac","-proc:none","-cp",cp,"-d",test_classes,*image_sources],"image-probe-compile")
             # The real client NativeImage path runs under the same default-deny policy.
             step(["/usr/bin/sandbox-exec","-f",policy,home/"bin/java","--enable-native-access=ALL-UNNAMED","-Xmx512m",
                   "-Duser.dir="+str(out),"-Duser.home="+str(out),"-Dorg.lwjgl.system.allocator=system","-Dorg.lwjgl.librarypath="+str(host),
                   "-cp",cp,"fabricaot.graphics.NativeImageProbe"],"image-probe",cwd=out)
             if "MINECRAFT_NATIVE_IMAGE_PASS" not in (out/"image-probe/stdout.log").read_text():raise RuntimeError("NativeImage probe marker missing")
             result["hostMinecraftImageFixture"]="PASS"
+            step([home/"bin/javac","-proc:none","-cp",cp,"-d",test_classes,probe_root/"WindowProbe.java"],"window-probe-compile")
+            step(["/usr/bin/sandbox-exec","-f",policy,home/"bin/java","--enable-native-access=ALL-UNNAMED","-Xmx512m",
+                  "-Duser.home="+str(out),"-Dorg.lwjgl.system.allocator=system","-Dorg.lwjgl.librarypath="+str(host),
+                  "-cp",cp,"fabricaot.graphics.WindowProbe"],"window-probe",cwd=out)
+            if "MINECRAFT_WINDOW_PROBE_PASS" not in (out/"window-probe/stdout.log").read_text():raise RuntimeError("Window probe marker missing")
+            result["hostMinecraftWindowFixture"]="PASS"
     except (OSError,RuntimeError,ValueError,subprocess.SubprocessError) as exc:
         result["status"]="BLOCKED";result["error"]=str(exc)
     result["steps"]=steps

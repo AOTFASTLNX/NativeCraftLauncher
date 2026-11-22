@@ -289,7 +289,7 @@ fn inspect(script: PathBuf, source: &str, python: &str) -> Result<Inspection, St
     let python = python_program(python);
     let result = capture_with_script_dir(
         &python,
-        &["-X", "utf8", script, source],
+        &["-B", "-X", "utf8", script, source],
         Duration::from_secs(120),
         Some(&script_path),
     )?;
@@ -794,6 +794,20 @@ mod tests {
         assert!(inspect(PathBuf::from("invalid.py"), "a\nb", "")
             .unwrap_err()
             .contains("有效"));
+    }
+
+    #[test]
+    fn preflight_does_not_modify_packaged_resources() {
+        let root = std::env::temp_dir().join(format!("ncl-preflight-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("version_fixture.py"), "VERSION = '1.21.1'\n").unwrap();
+        std::fs::write(root.join("preflight.py"),
+            "import json, version_fixture\nprint(json.dumps({'status': 'STATIC_PREFLIGHT_ONLY', 'target_minecraft': version_fixture.VERSION}))\n").unwrap();
+        let result = inspect(root.join("preflight.py"), "fixture.mrpack", "");
+        let wrote_cache = root.join("__pycache__").exists();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(result.unwrap().report["target_minecraft"], "1.21.1");
+        assert!(!wrote_cache, "preflight changed signed app resources");
     }
 
     #[test]

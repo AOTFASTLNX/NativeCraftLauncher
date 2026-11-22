@@ -1,13 +1,54 @@
 """Audit real metadata shapes without executing JAR code or retaining all classes."""
+import contextlib
+import hashlib
+import io
 import json
 import sys
 import tempfile
 import unittest
+import unittest.mock
 import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"tools"))
 from client_graph_diagnostics import audit_metadata, parse_time_rss, summarize_jfr, duration_seconds, summarize_gc_logs
+import probe_client_graph
+
+
+def _sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+def _preflight_fixture(root):
+    """Smallest prepared/runtime/caps tree that reaches the host-memory gate.
+
+    Every hashed input is a real file whose digest is recorded in the manifest, so the
+    probe's own verification passes and only the memory reading decides the outcome.
+    """
+    java = _write(root/"java/bin/java", "#!/bin/sh\nexit 0\n")
+    java.chmod(0o755)
+    _write(root/"java/bin/native-image", "#!/bin/sh\nexit 0\n")
+    libraries = [_write(root/"libs/a.jar", "a"), _write(root/"libs/b.jar", "b")]
+    driver = _write(root/"prepared/driver.jar", "driver")
+    prepared = root/"prepared"
+    _write(prepared/"result.json", json.dumps({
+        "minecraftVersion": "26.1.2",
+        "javaHome": str(root/"java"),
+        "javaSHA256": _sha(java),
+        "referenceLibraries": [{"path": str(p), "sha256": _sha(p)} for p in libraries],
+        "binaries": {"driver.jar": {"sha256": _sha(driver)}}}))
+    runtime = root/"runtime"
+    _write(runtime/"result.json", json.dumps({"target": "arm64-apple-ios17.0", "status": "COMPILED", "archives": {}}))
+    caps = root/"caps"
+    caps.mkdir()
+    evidence = _write(root/"evidence.json", json.dumps({"gateB1": "PASS"}))
+    return prepared, runtime, caps, evidence
 
 
 class ClientDiagnosticsTests(unittest.TestCase):
@@ -76,6 +117,44 @@ class ClientDiagnosticsTests(unittest.TestCase):
         self.assertEqual(summary["peakThreadsAtSafepoint"],22)
         self.assertEqual(summary["parallelGCWorkers"],9)
         self.assertIsNone(summarize_gc_logs("")["lastHeapAfterPauseBytes"])
+
+    def test_low_host_memory_preflight_records_blocked_and_returns_two(self):
+        """The 35% headroom gate must report, not crash.
+
+        A refused preflight used to lose its whole result when the error path raised while
+        reporting: the exception handler itself called sys.stderr, which was missing from the
+        module imports. The run then ended with a NameError instead of a written BLOCKED record.
+        """
+        pressure = {"returncode": 0, "stdout": "System-wide memory free percentage: 3%\n"
+                    "The system has 17179869184 bytes of physical memory\n", "stderr": ""}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prepared, runtime, caps, evidence = _preflight_fixture(root)
+            output = root/"out"
+            original = probe_client_graph.subprocess.run
+
+            def fake_run(argv, **kwargs):
+                if argv[:1] == ["/usr/bin/memory_pressure"]:
+                    return type("Completed", (), pressure)()
+                return original(argv, **kwargs)
+
+            stderr = io.StringIO()
+            with unittest.mock.patch.object(probe_client_graph.subprocess, "run", fake_run):
+                # The probe echoes its whole result record to stdout; keep the test output readable.
+                with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+                    code = probe_client_graph.main([
+                        "--output", str(output), "--prepared", str(prepared),
+                        "--runtime", str(runtime), "--caps", str(caps),
+                        "--b1-evidence", str(evidence)])
+
+            self.assertEqual(code, 2)
+            self.assertIn("Host memory headroom below bounded experiment threshold", stderr.getvalue())
+            record = json.loads((output/"result.json").read_text())
+            self.assertEqual(record["status"], "BLOCKED")
+            self.assertEqual(record["error"], "Host memory headroom below bounded experiment threshold")
+            self.assertEqual(record["hostMemory"]["availablePercent"], 3)
+            self.assertEqual(record["hostMemory"]["physicalBytes"], 17179869184)
+            self.assertFalse(record["analysisCompleted"])
 
 
 if __name__=="__main__":unittest.main()

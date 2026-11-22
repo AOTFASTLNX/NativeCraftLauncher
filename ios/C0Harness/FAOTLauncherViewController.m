@@ -613,6 +613,12 @@ static const CGFloat kTransitionBlurDrift = 22.0;
     [self.gamePage refreshPage];
 }
 
+- (void)runtimeFinishedSuccess:(BOOL)succeeded summary:(NSString *)summary logPath:(NSString *)logPath {
+    // Return to the game page with the runtime's final status.
+    [self showPage:@"game"];
+    [self.gamePage showRuntimeFinished:succeeded summary:summary logPath:logPath];
+}
+
 - (void)pageRequestedLayoutEditor {
     [self pageRequestedLayoutEditorNamed:FAOTLauncherSettings.shared.layoutName];
 }
@@ -626,7 +632,7 @@ static const CGFloat kTransitionBlurDrift = 22.0;
                                                      layoutName:layoutName
                                                      completion:^(FAOTControlLayout *updated, BOOL saved) {
         if (saved) {
-            FAOTLauncherSettings.shared.layoutName = layoutName;
+            FAOTLauncherSettings.shared.layoutName = FAOTControlActiveLayoutName();
             [(id<FAOTLauncherPage>)weakSelf.pages[@"settings"] refreshPage];
         }
     }];

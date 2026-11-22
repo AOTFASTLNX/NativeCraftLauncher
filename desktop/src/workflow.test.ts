@@ -3,6 +3,8 @@ import {
   buildProblems,
   defaultForm,
   explainError,
+  formVersion,
+  versionFacts,
   isActive,
   mergeJob,
   restoreForm,
@@ -28,6 +30,21 @@ const form = {
   source: "/fixture",
 };
 describe("executable workflow", () => {
+  it("selects the imported pack line and keeps stale reports from changing it", () => {
+    const legacy = { ...report, target_minecraft: "1.21.1" as const };
+    expect(formVersion(form, legacy)).toBe("1.21.1");
+    expect(formVersion({ ...form, source: "/other" }, legacy)).toBe("26.1.2");
+    expect(formVersion({ ...form, loader: "vanilla" }, legacy)).toBe("26.1.2");
+    const selected = { ...form, minecraftVersion: formVersion(form, legacy) };
+    expect(buildProblems(selected, legacy, true)).toEqual([]);
+    expect(versionFacts(selected.minecraftVersion).java).toBe(21);
+    expect(formVersion(selected, report)).toBe("26.1.2");
+  });
+  it("retains an explicit vanilla version across restarts", () => {
+    const restored = restoreForm(JSON.stringify({ ...form, loader: "vanilla", minecraftVersion: "1.21.1" }));
+    expect(restored.minecraftVersion).toBe("1.21.1");
+    expect(buildProblems(restored, null, true)).toEqual([]);
+  });
   it("persists optional test labels and validates labels before launch", () => {
     expect(
       restoreForm(JSON.stringify({ ...form, testVersion: "LAN-r5" }))

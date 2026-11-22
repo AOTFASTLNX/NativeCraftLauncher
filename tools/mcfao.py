@@ -28,7 +28,7 @@ from capture import ROOT, capture
 from bundle_source import source_identity
 from test_version import test_version, ipa_filename
 from loader_selection import default_version
-from graphics_common import bridge_overlays, verify_gl41_bridge
+from graphics_common import bridge_overlays, verify_gl41_bridge, validate_bridge_libraries
 from native_game_checks import verify_game_image
 from build_glfw_lite import exported_symbols, validate_input_exports
 from glfw_runtime_contract import validate_glfw_renderer
@@ -37,8 +37,9 @@ from aot_compatibility import add_bytecode_results, issue, publish, record_build
 from mdaf import AGENT_FILES
 from stage_game_assets import verified_assets
 from mod_file_policy import content_paths, copy_ignore, is_metadata
+from game_versions import DEFAULT_VERSION, SUPPORTED_VERSIONS, get_profile
 
-VERSION = "26.1.2"
+VERSION = DEFAULT_VERSION
 TARGET = "ios-arm64"
 # The Xcode project deliberately ships `DEVELOPMENT_TEAM = ""` so the repository carries no
 # personal team identifier. `xcodebuild` normally resolves the team from the signed-in Xcode
@@ -67,6 +68,9 @@ BACKEND_TOOLS = (
     "cleanup_storage",
     "storage_config", "bundle_source", "host_tools", "verified_download", "glfw_runtime_contract",
     "native_game_checks", "app_icon", "aot_cache", "test_version",
+    "game_versions", "prepare_game_version",
+    "prepare_logging_aot",
+    "prepare_opengl_aot",
 )
 
 
@@ -112,11 +116,53 @@ def toolchain(home: Path) -> dict:
     }
 
 
-def load_config(path: Path, renderer: str = DEFAULT_RENDERER) -> dict:
-    config = read_json(path)
+def load_config(path: Path, renderer: str = DEFAULT_RENDERER,
+                version: str = DEFAULT_VERSION) -> dict:
+    """Read one build config, applying the selected version's overrides.
+
+    A config may carry a versionProfiles object that maps supported versions to
+    an override object. Only the selected version is merged, and the override is
+    held to the same key schema as the root config, so a typo cannot quietly
+    become an unused key. The default version keeps working from the root keys
+    alone; any other version must be declared explicitly, because otherwise a
+    config written for 26.1.2 would be reused for a different client.
+    """
+    get_profile(version)
+    document = read_json(path)
+    if not isinstance(document, dict):
+        raise ValueError("Config must be a JSON object")
+    # Renderer-specific runtime directories may be overridden per version. A 1.21.1
+    # build reuses the same JDK/GraalVM runtime, but its GL41 shim is generated
+    # against the 1.21.1 client, so it must be able to point elsewhere.
+    override_keys = set(CONFIG_PATHS) | OPTIONAL_CONFIG_PATHS | {"gl41", "lwjglOpengl"}
+    profiles = document.get("versionProfiles")
+    if profiles is None:
+        overrides = {}
+    elif not isinstance(profiles, dict):
+        raise ValueError("Config versionProfiles must map versions to override objects")
+    else:
+        unknown = set(profiles) - set(SUPPORTED_VERSIONS)
+        if unknown:
+            raise ValueError("Config versionProfiles names unsupported versions: "
+                             + ", ".join(sorted(unknown)))
+        for name, override in profiles.items():
+            if not isinstance(override, dict):
+                raise ValueError(f"Config versionProfiles[{name}] must be an object")
+            unexpected = set(override) - override_keys
+            if unexpected:
+                raise ValueError(f"Config versionProfiles[{name}] has unsupported keys: "
+                                 + ", ".join(sorted(unexpected)))
+        overrides = profiles.get(version) or {}
+    # Any non-default version must be declared, whether or not versionProfiles exists,
+    # so a config written for 26.1.2 cannot be reused for another client.
+    if version != DEFAULT_VERSION and (not isinstance(profiles, dict) or version not in profiles):
+        raise ValueError(
+            f"Config declares no versionProfiles entry for Minecraft {version}. Add one "
+            "instead of reusing the default inputs.")
+    config = {name: value for name, value in document.items() if name != "versionProfiles"}
+    config.update(overrides)
     required = (set(CONFIG_PATHS) - {"metal", "shaders"}) | set(config_names(renderer))
-    allowed = set(CONFIG_PATHS) | OPTIONAL_CONFIG_PATHS | {"gl41", "lwjglOpengl"}
-    if not required <= config.keys() or config.keys() - allowed:
+    if not required <= config.keys() or config.keys() - override_keys:
         raise ValueError("Config requires " + ", ".join(CONFIG_PATHS) + ". Optional paths are openjdkSource and graalSource.")
     return {name: (path.parent / Path(value).expanduser()).resolve(strict=True)
             for name, value in config.items() if name in required or name in OPTIONAL_CONFIG_PATHS}
@@ -143,10 +189,23 @@ def asset_files(assets: Path, metadata: Path) -> dict:
 
 
 def inputs(config: dict, renderer: str = DEFAULT_RENDERER,
-           fabric_loader: str | None = None) -> tuple[dict, Path, list[Path]]:
+           fabric_loader: str | None = None,
+           version: str = DEFAULT_VERSION) -> tuple[dict, Path, list[Path]]:
+    profile = get_profile(version)
     prepared = read_json(config["prepared"] / "result.json")
     if prepared["status"] != "PREPARED":
         raise ValueError("Expected a verified PREPARED client reference")
+    # A prepared tree written before version selection carries no marker; those
+    # trees are the default 26.1.2 environment. Any other version must say so.
+    prepared_version = prepared.get("minecraftVersion", DEFAULT_VERSION)
+    if prepared_version != version:
+        raise ValueError(
+            f"Prepared client is Minecraft {prepared_version}, not {version}. "
+            "Prepare the selected version before building.")
+    if prepared.get("javaVersion") not in (None, profile.java_version):
+        raise ValueError(
+            f"Prepared client uses Java {prepared['javaVersion']}, but Minecraft {version} "
+            f"requires Java {profile.java_version}")
     home = Path(prepared["javaHome"]).resolve(strict=True)
     metadata = read_json(config["versionMetadata"])
     libraries = [Path(row["path"]) for row in prepared["referenceLibraries"]]
@@ -168,9 +227,11 @@ def inputs(config: dict, renderer: str = DEFAULT_RENDERER,
         engine_rows = drivers[fabric_loader]["engineLibraries"]
     for row in prepared["referenceLibraries"] + engine_rows:
         add(Path(row["path"]), row["sha256"])
-    clients = [p for p in libraries if p.name == f"{VERSION}.jar" and p.parent.name == VERSION]
-    if len(clients) != 1 or metadata["id"] != VERSION:
-        raise ValueError(f"Expected exactly one Minecraft {VERSION} client")
+    clients = [p for p in libraries if p.name == f"{version}.jar" and p.parent.name == version]
+    if len(clients) != 1 or metadata.get("id") != version:
+        raise ValueError(
+            f"Expected exactly one Minecraft {version} client; found "
+            f"{len(clients)} and version metadata id {metadata.get('id')!r}")
     with clients[0].open("rb") as stream:
         if hashlib.file_digest(stream, "sha1").hexdigest() != metadata["downloads"]["client"]["sha1"]:
             raise ValueError(f"Client hash differs from version metadata: {clients[0]}")
@@ -192,6 +253,11 @@ def inputs(config: dict, renderer: str = DEFAULT_RENDERER,
         add(config["prepared"] / name, prepared["binaries"][name]["sha256"] if name == "driver.jar" else None)
     for name in ("versionMetadata", "b1Evidence"):
         add(config[name])
+    if profile.requires_remapping:
+        mapping = prepared.get("mappings")
+        if not isinstance(mapping, dict) or not mapping.get("sha256"):
+            raise ValueError("Selected prepared client lacks verified official mappings")
+        add(Path(mapping["path"]), mapping["sha256"])
     # Existing graphics builds are immutable inputs. Their report checks and the target
     # checks are repeated by the packaging step.
     for name in ("caps", *config_names(renderer)):
@@ -213,6 +279,7 @@ def inputs(config: dict, renderer: str = DEFAULT_RENDERER,
                 files.update({f"bundle/{p}": h for p, h in tree_files(directory / "bundle").items()})
         fingerprints.update({str(directory / p): h for p, h in files.items()})
     bridge_overlays(config["lwjgl"])
+    validate_bridge_libraries(config["lwjgl"], prepared["referenceLibraries"], version)
     # A valid historical report can still predate a required Mod input API.
     # Inspect the actual binary and bind the Java overlays to that GLFW input.
     glfw_binary = config["glfw"] / "libglfw.dylib"
@@ -246,6 +313,9 @@ def inputs(config: dict, renderer: str = DEFAULT_RENDERER,
         shim = read_json(config["lwjglOpengl"] / "result.json")
         if shim.get("status") != "LWJGL_OPENGL_SHIM_BUILT" or validate_dylib(config["lwjglOpengl"] / "liblwjgl_opengl.dylib")["sha256"] != shim["binarySHA256"]:
             raise ValueError("Invalid GL41 JNI shim")
+        opengl = [p for p in libraries if p.name.startswith("lwjgl-opengl-") and "-natives-" not in p.name]
+        if len(opengl) != 1 or shim.get("lwjglOpenGLJarSHA256") != sha256(opengl[0]):
+            raise ValueError("OpenGL JNI shim was built against another LWJGL input")
     runtime = config["bootstrapRuntime"]
     add(runtime / "result.json")
     for row in read_json(runtime / "result.json")["archives"].values():
@@ -285,7 +355,11 @@ def inputs(config: dict, renderer: str = DEFAULT_RENDERER,
                 if file.is_file() and not is_metadata(file.relative_to(source / relative)):
                     add(file)
     return {
-        "schema": 1, "version": VERSION, "loader": "vanilla", "mappingNamespace": "official",
+        "schema": 1, "version": version, "minecraftVersion": version,
+        "javaVersion": profile.java_version,
+        "assetIndex": read_json(config["versionMetadata"])["assetIndex"]["id"],
+        "requiresRemapping": profile.requires_remapping,
+        "loader": "vanilla", "mappingNamespace": profile.runtime_namespace,
         "renderer": renderer, **source_identity(ROOT),
         "target": TARGET, "config": {key: str(p) for key, p in config.items()},
         "toolchain": toolchain(home), "filesSHA256": fingerprints,
@@ -607,7 +681,10 @@ def resolve_development_team(bundle_identifier: str = BUNDLE_IDENTIFIER,
 
 def device_xcode(staged: Path, assets: Path, team: str | None = None, *, renderer=DEFAULT_RENDERER, unsigned=False,
                  bundle_id=BUNDLE_IDENTIFIER, icon: Path | None = None, icon_name: str | None = None,
-                 test_version_label="") -> list:
+                 test_version_label="", minecraft_version=DEFAULT_VERSION, asset_index="30") -> list:
+    get_profile(minecraft_version)
+    if not isinstance(asset_index, str) or not re.fullmatch(r"[0-9]+", asset_index):
+        raise ValueError("Invalid asset index ID")
     team = ("" if unsigned else resolve_development_team(bundle_id)) if team is None else team
     icon_settings = ([f"FAOT_APP_ICON_DIR={icon}", f"FAOT_APP_ICON_NAME={icon_name}"]
                      if icon and icon_name else [])
@@ -618,9 +695,19 @@ def device_xcode(staged: Path, assets: Path, team: str | None = None, *, rendere
         f"FAOT_GAME_ASSETS_DIR={assets}", f"DEVELOPMENT_TEAM={team}", f"FAOT_RENDERER={renderer}",
         f"PRODUCT_BUNDLE_IDENTIFIER={bundle_id}",
         f"FAOT_TEST_VERSION={test_version(test_version_label)}",
+        f"FAOT_MINECRAFT_VERSION={minecraft_version}", f"FAOT_ASSET_INDEX={asset_index}",
         *icon_settings,
         *(["CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO"] if unsigned else []),
     ]
+
+
+def validate_game_profile(app: Path, inputs: dict):
+    if "assetIndex" not in inputs:
+        return  # Older 26.1.2 builds predate the explicit packaged profile.
+    info = plistlib.loads((app / "Info.plist").read_bytes())
+    if (info.get("FAOTMinecraftVersion") != inputs["version"]
+            or info.get("FAOTAssetIndex") != inputs["assetIndex"]):
+        raise ValueError("Packaged Minecraft version or asset index differs from build inputs")
 
 
 def verify(output: Path, device: str | None) -> dict:
@@ -642,6 +729,7 @@ def verify(output: Path, device: str | None) -> dict:
     if read_json(Path(report["linkReport"]))["target"] != "arm64-apple-ios17.0":
         raise ValueError("Incorrect native link target")
     app = output / report["app"]
+    validate_game_profile(app, read_json(output / "inputs.json"))
     if not app.resolve().is_relative_to(output) or tree_files(app) != report["appFilesSHA256"]:
         raise ValueError(f"Packaged app content differs from the build manifest: {app}")
     icon = report.get("appIcon")
@@ -700,6 +788,8 @@ def export_ipa(args) -> dict:
     bundle_id = evidence.get("bundleID", BUNDLE_IDENTIFIER)
     seed = build / "instance-seed"
     step("archive", [*device_xcode(staged, assets, renderer=renderer, bundle_id=bundle_id,
+                                   minecraft_version=evidence.get("version", DEFAULT_VERSION),
+                                   asset_index=evidence.get("assetIndex", "30"),
                                    test_version_label=evidence.get("testVersion", ""), **icon_settings),
                      *([f"FAOT_INSTANCE_DATA_DIR={seed}"] if seed.is_dir() else []), "-derivedDataPath", output / "DerivedData",
                      "-archivePath", archive, "archive"])
@@ -725,6 +815,7 @@ def export_ipa(args) -> dict:
     if len(apps) != 1:
         raise ValueError("Expected one exported iPhoneOS app")
     validate_package(apps[0], staged, evidence["assetsSHA256"], renderer)
+    validate_game_profile(apps[0], evidence)
     provenance = None
     if manifest.get("buildProvenance") is not None:
         provenance = validate_build_provenance(apps[0], manifest["buildKey"], manifest["sourceCommit"], renderer)
@@ -735,6 +826,8 @@ def export_ipa(args) -> dict:
     result = {"status": "DEVELOPMENT_IPA_VERIFIED", "target": TARGET, "ipa": str(ipa),
               "sha256": sha256(ipa), "bytes": ipa.stat().st_size, "build": str(build),
               "exportOptionsSHA256": sha256(options), "testVersion": label,
+              "minecraftVersion": evidence.get("version", DEFAULT_VERSION),
+              "assetIndex": evidence.get("assetIndex", "30"),
               "renderer": renderer, "sourceCommit": manifest.get("sourceCommit"),
               "buildProvenance": provenance,
               "verification": app_facts(apps[0], args.device, output / "verify", renderer)}
@@ -760,19 +853,45 @@ def instance_files(root):
     return files
 
 
+def remap_client(pipeline, manifest, config, client, libraries):
+    """Checkpoint the verified vanilla remap before any name-dependent adapter."""
+    if not get_profile(manifest["version"]).requires_remapping:
+        return client
+    output = pipeline.step("game-version", script(
+        "prepare_game_version", "--prepared", config["prepared"],
+        "--client", client, "--output", "{product}"))
+    report = read_json(output / "result.json")
+    if report.get("minecraftVersion") != manifest["version"] or not report.get("remapped"):
+        raise ValueError("Client mapping stage returned another Minecraft version")
+    mapped = Path(report["client"])
+    if sha256(mapped) != report["clientSHA256"]:
+        raise ValueError("Mapped client changed after preparation")
+    return mapped
+
+
 def compile_client_image(pipeline, manifest, config, client, libraries, loader_report, trace_paths):
     renderer = manifest["renderer"]
     gl41 = renderer == "gl41"
     home = Path(read_json(config["prepared"] / "result.json")["javaHome"])
+    if manifest.get("requiresRemapping") and not loader_report:
+        client = remap_client(pipeline, manifest, config, client, libraries)
+    # The splitter resolves inherited types through this classpath. Its client
+    # entry must have the same namespace and transformed classes as --jar.
+    libraries = [client if Path(path).name == manifest["version"] + ".jar"
+                 and Path(path).parent.name == manifest["version"] else path
+                 for path in libraries]
     split = pipeline.step("split", script(
         "split_methods", "--jar", client, "--output-jar", "{product}/client.jar",
         "--report", "{product}/split-report.json", "--tool", config["splitter"],
         "--classpath", *libraries))
     asm = [row["path"] for row in read_json(config["splitter"] / "result.json")["asmJars"]
            if row["name"] in {"asm-9.9.jar", "asm-tree-9.9.jar"}]
+    # The GL41 patcher rewrites version-specific classes, so it is told which client
+    # it is patching. The Metal injection path only ever runs for the default version.
     injected = pipeline.step("gl41-patch" if gl41 else "metal-injection", script(
         "patch_gl41_client" if gl41 else "inject_metal_backend", "--client", split / "client.jar", "--output", "{product}",
-        "--graalvm-home", home, "--asm-jars", *asm))
+        "--graalvm-home", home, "--asm-jars", *asm,
+        *(["--version", manifest["version"]] if gl41 else [])))
     tracing_path = None
     if loader_report:
         tracing = read_json(loader_report).get("tracingAgent", {})
@@ -810,7 +929,8 @@ def compile_client_image(pipeline, manifest, config, client, libraries, loader_r
     return aot
 
 
-def build(args, config):
+def build(args, config, version: str = DEFAULT_VERSION):
+    profile = get_profile(version)
     output = args.output.resolve()
     if output.is_dir() and any(output.iterdir()) and not (
             (output / "inputs.json").is_file() or {p.name for p in output.iterdir()} == {".lock"}):
@@ -821,8 +941,15 @@ def build(args, config):
         if (output / "result.json").exists():
             raise ValueError("Completed build is immutable. Use verify or select a new output.")
         renderer = getattr(args, "renderer", DEFAULT_RENDERER)
+        # Only the GL41 line is implemented for an added version. The native Metal
+        # backend is built against the default client and has no 1.21.1 path.
+        if version != DEFAULT_VERSION and renderer != "gl41":
+            raise ValueError(
+                f"Minecraft {version} is only implemented with the GL41 renderer; "
+                f"--renderer {renderer} is unsupported for this version. The native Metal "
+                "backend targets the default 26.1.2 client.")
         fabric_loader = getattr(args, "fabric_loader", None) if args.loader == "fabric" else None
-        manifest, client, libraries = inputs(config, renderer, fabric_loader)
+        manifest, client, libraries = inputs(config, renderer, fabric_loader, version)
         # Large Fabric graphs can fill Parallel GC's old generation during method layout,
         # even at the configured heap limit. G1 assigns heap regions to generations as needed.
         builder_gc = getattr(args, "builder_gc", None) or ("g1" if args.loader == "fabric" else "parallel")
@@ -976,11 +1103,13 @@ def build(args, config):
             pipeline_icon = icon_build / "compiled"
         app = pipeline.step("package", [
             *device_xcode(staged, config["assets"], renderer=renderer, unsigned=manifest["unsigned"],
+                          minecraft_version=manifest["version"], asset_index=manifest["assetIndex"],
                           bundle_id=manifest["bundleID"], test_version_label=manifest["testVersion"],
                           icon=pipeline_icon, icon_name=icon_name),
             *([f"FAOT_INSTANCE_DATA_DIR={seed}"] if seed else []), "-derivedDataPath", "{product}", "build"],
             outputs=lambda attempt: attempt / "product/Build/Products/World Device-iphoneos/C0Harness.app")
         validate_package(app, staged, manifest["assetsSHA256"], renderer)
+        validate_game_profile(app, manifest)
         provenance = validate_build_provenance(app, key, manifest["sourceCommit"], renderer)
         if icon_name:
             verify_icon(app, icon_name)
@@ -1001,6 +1130,7 @@ def build(args, config):
             "ipa": str(ipa), "bytes": ipa.stat().st_size, "sha256": sha256(ipa),
             "signature": "UNSIGNED" if manifest["unsigned"] else "DEVELOPMENT_SIGNED",
             "testVersion": manifest["testVersion"],
+            "minecraftVersion": manifest["version"], "assetIndex": manifest["assetIndex"],
             "appIcon": ({"assetName": icon_name, **manifest["appIcon"]} if icon_name else None),
             "loader": args.loader, "loaderReport": str(loader_report) if loader_report else None,
             "compatibilityReport": str(output / "compatibility.json"),
@@ -1020,8 +1150,10 @@ def main(argv=None):
     doctor = commands.add_parser("doctor")
     doctor.add_argument("--config", type=Path, required=True)
     doctor.add_argument("--renderer", choices=RENDERERS, default=DEFAULT_RENDERER)
+    doctor.add_argument("--version", choices=SUPPORTED_VERSIONS, default=DEFAULT_VERSION,
+                        help="Minecraft version to verify (default: the supported default)")
     compile_command = commands.add_parser("build")
-    compile_command.add_argument("--version", choices=(VERSION,), required=True)
+    compile_command.add_argument("--version", choices=SUPPORTED_VERSIONS, required=True)
     compile_command.add_argument("--loader", choices=("vanilla", "fabric"), required=True)
     compile_command.add_argument("--config", type=Path, required=True)
     compile_command.add_argument("--mods", type=Path)
@@ -1087,12 +1219,14 @@ def main(argv=None):
             paths["builds"] = args.output.absolute()
             require_space(paths)
         if args.action == "doctor":
-            config = load_config(args.config.resolve(), args.renderer)
-            manifest, client, _ = inputs(config, args.renderer)
-            result = {"status": "INPUTS_VERIFIED", "client": str(client),
+            config = load_config(args.config.resolve(), args.renderer, args.version)
+            manifest, client, _ = inputs(config, args.renderer, version=args.version)
+            result = {"status": "INPUTS_VERIFIED", "version": args.version, "client": str(client),
+                      "requiresRemapping": manifest["requiresRemapping"],
                       "inputCount": len(manifest["filesSHA256"]), "toolchain": manifest["toolchain"]}
         elif args.action == "build":
-            result = {"manifest": str(build(args, load_config(args.config.resolve(), args.renderer)))}
+            result = {"manifest": str(build(
+                args, load_config(args.config.resolve(), args.renderer, args.version), args.version))}
         elif args.action == "export":
             result = export_ipa(args)
         else:

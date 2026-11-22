@@ -1,5 +1,9 @@
 package fabricaot.diag;
 
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
@@ -16,6 +20,14 @@ import java.util.concurrent.atomic.AtomicLong;
  * a full Java thread dump is written after a level-load state has stopped progressing.
  * A separate {@code -Dmcfao.diag.tickStallSeconds=N} (default 5) catches a blocked client
  * loop promptly, even while network packets continue arriving during normal terrain loading.
+ *
+ * <p>Output goes to the original {@code FileDescriptor.err}, not to {@code System.out}/{@code
+ * System.err}. Minecraft's {@code Bootstrap} replaces both standard streams with Log4j-backed
+ * sinks, so a line written through them can be filtered, reformatted or dropped exactly when the
+ * transition it describes has failed. The descriptor is opened once, never closed (it is shared
+ * with the rest of the process), and written with UTF-8 and autoflush so a crash cannot swallow a
+ * buffered tail. This package is listed in {@code --initialize-at-run-time}, so no build-host
+ * descriptor can be captured into the image heap.
  */
 public final class PlayDiagnostics implements Runnable {
     private static final boolean ENABLED =
@@ -26,6 +38,9 @@ public final class PlayDiagnostics implements Runnable {
     private static final long START_NANOS = System.nanoTime();
     private static final PlayDiagnostics INSTANCE = new PlayDiagnostics();
     private static final Object LOCK = new Object();
+
+    /** Opened lazily on first use; deliberately never closed. */
+    private static PrintStream stderr;
 
     private static final AtomicLong SEQ = new AtomicLong();
     private static final AtomicLong TICKS = new AtomicLong();
@@ -98,9 +113,37 @@ public final class PlayDiagnostics implements Runnable {
                 + " wall=" + Instant.now()
                 + " thread=" + Thread.currentThread().getName()
                 + (fields.isEmpty() ? "" : " " + fields);
+        write(line);
+    }
+
+    /**
+     * Writes one complete line to the real stderr descriptor, bypassing {@code System.out} and
+     * {@code System.err} so stream redirection cannot hide diagnostics.
+     */
+    private static void write(String line) {
         synchronized (LOCK) {
-            System.out.println(line);
-            System.out.flush();
+            PrintStream out = stderr();
+            out.println(line);
+            out.flush();
+        }
+    }
+
+    private static PrintStream stderr() {
+        PrintStream current = stderr;
+        if (current != null) return current;
+        synchronized (LOCK) {
+            if (stderr == null) stderr = openStderr();
+            return stderr;
+        }
+    }
+
+    private static PrintStream openStderr() {
+        try {
+            return new PrintStream(
+                    new FileOutputStream(FileDescriptor.err), true, StandardCharsets.UTF_8);
+        } catch (RuntimeException unavailable) {
+            // Keep the diagnostic even if the descriptor is unusable, and never break the client.
+            return System.err;
         }
     }
 
@@ -312,7 +355,7 @@ public final class PlayDiagnostics implements Runnable {
                 Runtime runtime = Runtime.getRuntime();
                 long committed = runtime.totalMemory();
                 long free = runtime.freeMemory();
-                System.err.println("[GL41-DIAG] javaHeapUsed=" + (committed - free)
+                write("[GL41-DIAG] javaHeapUsed=" + (committed - free)
                         + " javaHeapCommitted=" + committed + " javaHeapMax=" + runtime.maxMemory());
                 lastMemoryReport = current;
             }

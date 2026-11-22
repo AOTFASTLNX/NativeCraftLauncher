@@ -39,21 +39,20 @@ final class RuntimeLowering implements Opcodes {
             "net/fabricmc/loader/util/version/SemanticVersionImpl",
             "net/fabricmc/loader/util/version/VersionParsingException");
 
-    /**
-     * MappingResolver queries the closed world can answer. The runtime runs official names, so a
-     * query that targets the official namespace never changes its input: the name argument comes
-     * straight back. Methods targeting other namespaces keep their signature but return the input
-     * too - the callers either degrade gracefully (a try/catch fallback) or were already stubbed.
-     */
+    /** MappingResolver queries answered by generated hooks and the selected version's mapping data. */
     private static final Map<String, String> MAPPING_HOOKS = Map.of(
             "mapFieldName", "mappingFieldName",
             "mapMethodName", "mappingMethodName",
             "mapClassName", "mappingClassName",
             "unmapClassName", "mappingUnmapClassName",
             "unmapFieldName", "mappingUnmapFieldName",
-            "getNamespaces", "mappingNamespaces");
+            "getNamespaces", "mappingNamespaces",
+            "getCurrentRuntimeNamespace", "mappingRuntimeNamespace");
     private static final String EVENTS = "net/fabricmc/fabric/impl/base/event/EventFactoryImpl";
     private static final String EVENTS_SHA256 = "065be26b910ddcf78f27e48d2808eb7ecbacfbcdc38292459ca2c8f496ae7d79";
+    // Fabric API 0.116.18+1.21.1 after the pinned intermediary -> official remap.
+    // Its private proxy helpers have no callers, just as in the default line.
+    static final String EVENTS_1211_SHA256 = "6d468bd557975d377f7f925b60289e7853bb4a10f585e4a5e2a03e24478bcc7f";
     // GlitchCore's event bus asks TypeResolver for the Consumer<T> type argument of a hidden
     // lambda class. Native Image has no generic signature/constant pool for such a class, so the
     // closed world must resolve T at build time instead. Both hashes are the original Mod JAR
@@ -902,6 +901,10 @@ final class RuntimeLowering implements Opcodes {
             "net/fabricmc/fabric/impl/client/indigo/IndigoMixinConfigPlugin";
     static final String INDIGO_PLUGIN_SHA256 =
             "934ac8f2002a53fcf5a095d44cfd1ce97625ff362058b2556b5d4f59941f0d47";
+    // The 1.21.1 plugin computes shouldApplyIndigo from the same contains_renderer
+    // metadata-presence test, plus an else-if force_compatibility presence test.
+    static final String INDIGO_PLUGIN_1211_SHA256 =
+            "bc20d979919dc6f502ad91835c07e0b8b8dd2f833ad48a40400d03805ea4071c";
     static final String JADE_METADATA = "snownee/jade/util/FabricJadeMetadata";
     static final String JADE_METADATA_SHA256 =
             "0893768a286b48ac48e75ab7b8d7ecf2da3321d8743fbba0366abd0c42aa2184";
@@ -946,19 +949,23 @@ final class RuntimeLowering implements Opcodes {
         adaptations.add(node.name + "#<init> Jade metadata=" + flags + ", disabledTooltips=" + disabledTooltips);
     }
 
-    static void foldIndigoGate(ClassNode node, boolean applicable, String pluginHash,
+    static void foldIndigoGate(ClassNode node, boolean applicable, boolean forceCompatibility, String pluginHash,
             List<String> adaptations) {
         for (var method : node.methods) {
             for (var instruction : method.instructions.toArray()) {
                 if (!(instruction instanceof MethodInsnNode call)
                         || call.getOpcode() != INVOKESTATIC || !call.owner.equals(INDIGO_PLUGIN)
-                        || !call.name.equals("shouldApplyIndigo") || !call.desc.equals("()Z")) continue;
-                if (!INDIGO_PLUGIN_SHA256.equals(pluginHash)) {
+                        || !call.desc.equals("()Z")
+                        || !(call.name.equals("shouldApplyIndigo") || call.name.equals("shouldForceCompatibility"))) continue;
+                boolean force = call.name.equals("shouldForceCompatibility");
+                if (!(INDIGO_PLUGIN_1211_SHA256.equals(pluginHash)
+                        || (!force && INDIGO_PLUGIN_SHA256.equals(pluginHash)))) {
                     throw new IllegalArgumentException("Unaudited Indigo plugin query: " + pluginHash);
                 }
-                method.instructions.set(call, new InsnNode(applicable ? ICONST_1 : ICONST_0));
+                boolean decision = force ? forceCompatibility : applicable;
+                method.instructions.set(call, new InsnNode(decision ? ICONST_1 : ICONST_0));
                 adaptations.add(node.name + "#" + method.name
-                        + " shouldApplyIndigo=" + applicable + " (resolved renderer metadata)");
+                        + " " + call.name + "=" + decision + " (resolved renderer metadata)");
             }
         }
     }
@@ -1091,8 +1098,7 @@ final class RuntimeLowering implements Opcodes {
             }
             lowerComputedModQueries(node, method, adaptations);
             // MappingResolver: the whole `getInstance().getMappingResolver().mapXxx(...)` chain is
-            // routed to a generated identity hook, so no Loader type reaches the image and the
-            // caller keeps the name it would have resolved in an official-name runtime. The
+            // routed to a generated version-aware hook. The
             // arguments sit between the resolver and the call, so the walk back crosses them.
             for (var instruction : method.instructions.toArray()) {
                 if (!(instruction instanceof MethodInsnNode query) || !query.owner.equals(MAPPING_RESOLVER)
@@ -1116,7 +1122,7 @@ final class RuntimeLowering implements Opcodes {
                         query.desc, false));
                 method.instructions.remove(resolverCall);
                 method.instructions.remove(instanceCall);
-                adaptations.add(node.name + "#" + method.name + " MappingResolver." + query.name + "=identity");
+                adaptations.add(node.name + "#" + method.name + " MappingResolver." + query.name + "=build-derived mapping");
             }
         }
         // Report-only builds keep unsupported methods linkable, while executing one fails
@@ -1561,7 +1567,8 @@ final class RuntimeLowering implements Opcodes {
     }
 
     static void removeUnusedEventProxy(String mod, String sourceHash, ClassNode node, List<String> adaptations) {
-        if (!mod.equals("fabric-api-base") || !node.name.equals(EVENTS) || !sourceHash.equals(EVENTS_SHA256)) return;
+        if (!mod.equals("fabric-api-base") || !node.name.equals(EVENTS)
+                || !(EVENTS_SHA256.equals(sourceHash) || EVENTS_1211_SHA256.equals(sourceHash))) return;
         // This exact upstream class has no references to the private proxy helper.
         // Retain createArrayBacked and its normal invoker factory unchanged.
         int count = node.methods.size();

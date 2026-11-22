@@ -42,6 +42,8 @@
 		F0000000000000000000006 /* CustomControlsUtils.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000006 /* CustomControlsUtils.m */; };
 		E0000000000000000000007 /* CustomControlsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000007 /* CustomControlsViewController.m */; };
 		F0000000000000000000007 /* CustomControlsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000007 /* CustomControlsViewController.m */; };
+		E000000000000000000000E /* CustomControlsViewController+UndoManager.m in Sources */ = {isa = PBXBuildFile; fileRef = D000000000000000000000E /* CustomControlsViewController+UndoManager.m */; };
+		F000000000000000000000E /* CustomControlsViewController+UndoManager.m in Sources */ = {isa = PBXBuildFile; fileRef = D000000000000000000000E /* CustomControlsViewController+UndoManager.m */; };
 		E0000000000000000000008 /* DBNumberedSlider.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000008 /* DBNumberedSlider.m */; };
 		F0000000000000000000008 /* DBNumberedSlider.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000008 /* DBNumberedSlider.m */; };
 		E0000000000000000000009 /* FileListViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000009 /* FileListViewController.m */; };
@@ -126,6 +128,7 @@
 		D0000000000000000000005 /* ControlJoystick.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/ControlJoystick.m"; sourceTree = "<group>"; };
 		D0000000000000000000006 /* CustomControlsUtils.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/CustomControlsUtils.m"; sourceTree = "<group>"; };
 		D0000000000000000000007 /* CustomControlsViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/CustomControlsViewController.m"; sourceTree = "<group>"; };
+		D000000000000000000000E /* CustomControlsViewController+UndoManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/CustomControlsViewController+UndoManager.m"; sourceTree = "<group>"; };
 		D0000000000000000000008 /* DBNumberedSlider.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/DBNumberedSlider.m"; sourceTree = "<group>"; };
 		D0000000000000000000009 /* FileListViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/FileListViewController.m"; sourceTree = "<group>"; };
 		D000000000000000000000A /* NSPredicateUtilitiesExternal.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/NSPredicateUtilitiesExternal.m"; sourceTree = "<group>"; };
@@ -211,6 +214,7 @@
 				D0000000000000000000005 /* ControlJoystick.m */,
 				D0000000000000000000006 /* CustomControlsUtils.m */,
 				D0000000000000000000007 /* CustomControlsViewController.m */,
+				D000000000000000000000E /* CustomControlsViewController+UndoManager.m */,
 				D0000000000000000000008 /* DBNumberedSlider.m */,
 				D0000000000000000000009 /* FileListViewController.m */,
 				D000000000000000000000A /* NSPredicateUtilitiesExternal.m */,
@@ -396,6 +400,7 @@
 				E0000000000000000000005 /* ControlJoystick.m in Sources */,
 				E0000000000000000000006 /* CustomControlsUtils.m in Sources */,
 				E0000000000000000000007 /* CustomControlsViewController.m in Sources */,
+				E000000000000000000000E /* CustomControlsViewController+UndoManager.m in Sources */,
 				E0000000000000000000008 /* DBNumberedSlider.m in Sources */,
 				E0000000000000000000009 /* FileListViewController.m in Sources */,
 				E000000000000000000000A /* NSPredicateUtilitiesExternal.m in Sources */,
@@ -433,6 +438,7 @@
 				F0000000000000000000005 /* ControlJoystick.m in Sources */,
 				F0000000000000000000006 /* CustomControlsUtils.m in Sources */,
 				F0000000000000000000007 /* CustomControlsViewController.m in Sources */,
+				F000000000000000000000E /* CustomControlsViewController+UndoManager.m in Sources */,
 				F0000000000000000000008 /* DBNumberedSlider.m in Sources */,
 				F0000000000000000000009 /* FileListViewController.m in Sources */,
 				F000000000000000000000A /* NSPredicateUtilitiesExternal.m in Sources */,
@@ -600,6 +606,8 @@
 				);
 				OTHER_LDFLAGS = (
 					"-framework",
+					PhotosUI,
+					"-framework",
 					UIKit,
 					"-framework",
 					Foundation,
@@ -638,6 +646,8 @@
 					"@executable_path/Frameworks",
 				);
 				OTHER_LDFLAGS = (
+					"-framework",
+					PhotosUI,
 					"-framework",
 					UIKit,
 					"-framework",
@@ -683,6 +693,8 @@
 					"@executable_path/Frameworks",
 				);
 				OTHER_LDFLAGS = (
+					"-framework",
+					PhotosUI,
 					"-framework",
 					UIKit,
 					"-framework",
@@ -739,6 +751,8 @@
 				);
 				OTHER_LDFLAGS = (
 					"-framework",
+					PhotosUI,
+					"-framework",
 					UIKit,
 					"-framework",
 					Foundation,
@@ -782,6 +796,8 @@
 					"@executable_path/Frameworks",
 				);
 				OTHER_LDFLAGS = (
+					"-framework",
+					PhotosUI,
 					"-framework",
 					UIKit,
 					"-framework",

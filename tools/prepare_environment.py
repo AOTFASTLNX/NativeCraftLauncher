@@ -20,8 +20,38 @@ from prepare_shader_toolchain import extract
 from storage_config import require_space
 from verified_download import fetch
 import native_dependencies
+from game_versions import DEFAULT_VERSION, get_profile
 
 HEADER_DIR = Path('build/fabricaot-host/support/headers/java.base')
+# Root config keys that point at client-specific inputs. A non-default version
+# declares its own copies so 26.1.2 inputs are never reused for another line.
+PROFILE_KEY = 'versionProfiles'
+PROFILE_KEYS = ('prepared', 'versionMetadata', 'assets', 'glfw', 'lwjgl', 'gl41', 'lwjglOpengl')
+
+
+def minecraft_version(value):
+    """An absent marker means the default line, as written by older builds."""
+    return DEFAULT_VERSION if value is None else get_profile(value).version
+
+
+def config_document(fields, version=DEFAULT_VERSION):
+    """The JSON document saved for one prepared line.
+
+    26.1.2 keeps the plain root keys so existing configs stay valid. Another
+    line also records its client-specific inputs under versionProfiles, merging
+    over any entry already there so other lines keep their own inputs.
+    """
+    version = minecraft_version(version)
+    document = {key: value if isinstance(value, dict) else str(value)
+                for key, value in fields.items() if key != PROFILE_KEY}
+    profiles = fields.get(PROFILE_KEY)
+    if version == DEFAULT_VERSION:
+        if isinstance(profiles, dict): document[PROFILE_KEY] = profiles
+        return document
+    entry = {key: str(fields[key]) for key in PROFILE_KEYS if key in fields}
+    existing = profiles.get(version) if isinstance(profiles, dict) else None
+    document[PROFILE_KEY] = {**(profiles or {}), version: {**(existing or {}), **entry}}
+    return document
 
 
 def check_host():
@@ -82,9 +112,10 @@ def prepare_headers(root, cache, home, jdk, logs, run):
         pending.rename(headers)
 
 
-def preparation_key(root, home, client, sdk):
+def preparation_key(root, home, client, sdk, version=DEFAULT_VERSION):
     from bundle_source import source_identity
     digest = hashlib.sha256(sdk)
+    digest.update(minecraft_version(version).encode() + b'\0')
     digest.update(json.dumps(source_identity(root), sort_keys=True).encode())
     for path in (root, home, client['versionMetadata'], client['assets']):
         digest.update(os.fsencode(path) + b'\0')
@@ -92,10 +123,12 @@ def preparation_key(root, home, client, sdk):
     return digest.hexdigest()
 
 
-def verify_config(root, path):
+def verify_config(root, path, version=DEFAULT_VERSION):
+    """Validate a config for one selected line, using that line's overrides."""
     from mcfao import inputs, load_config
-    native_dependencies.preflight(root, path)
-    inputs(load_config(path, 'gl41'), 'gl41')
+    version = minecraft_version(version)
+    native_dependencies.preflight(root, path, version)
+    inputs(load_config(path, 'gl41', version), 'gl41', version=version)
 
 
 def prepare(root, paths, home, client, game, sdk, update, write_json):
@@ -103,8 +136,9 @@ def prepare(root, paths, home, client, game, sdk, update, write_json):
     from inspect_ios_candidate import inspect
     import zipfile
 
+    version = minecraft_version(game.get('minecraftVersion'))
     cache = paths['cache'].resolve()
-    generation = (paths['jobs'] / 'setup' / preparation_key(root, home, game, sdk)).resolve()
+    generation = (paths['jobs'] / 'setup' / preparation_key(root, home, game, sdk, version)).resolve()
     generation.mkdir(parents=True, exist_ok=True)
     logs = generation / ('attempt-' + uuid4().hex[:10])
     logs.mkdir()
@@ -112,7 +146,7 @@ def prepare(root, paths, home, client, game, sdk, update, write_json):
     update(stage='verify', message='检查已有构建环境', logDirectory=str(logs))
     try:
         if config.is_file():
-            verify_config(root, config)
+            verify_config(root, config, version)
             return config
     except (OSError, RuntimeError, ValueError, KeyError):
         pass
@@ -196,13 +230,13 @@ def prepare(root, paths, home, client, game, sdk, update, write_json):
         label = native_dependencies.BY_KEY[key][1]
         fields[key] = stage(key, '正在准备 ' + label,
                             lambda out: native_dependencies.build_one(
-                                root, fields, key, out, compile_dependency, write_json),
+                                root, fields, key, out, compile_dependency, write_json, version),
                             native_dependencies.MANIFEST)
     update(stage='verify', message='正在验证并保存构建配置')
     candidate = logs / 'config.json'
-    write_json(candidate, {key: str(value) for key, value in fields.items()})
+    write_json(candidate, config_document(fields, version))
     try:
-        verify_config(root, candidate)
+        verify_config(root, candidate, version)
     except (OSError, RuntimeError, ValueError, KeyError):
         # A tampered cached output can pass its marker check but fail full
         # validation. The next attempt starts fresh without touching old files.

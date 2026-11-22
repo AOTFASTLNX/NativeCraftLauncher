@@ -33,13 +33,33 @@ JNIEXPORT jlong JNICALL Java_org_lwjgl_stb_STBImage_nstbi_1load_1from_1memory__J
 }
 JNIEXPORT jlong JNICALL Java_org_lwjgl_stb_STBImage_nstbi_1failure_1reason(JNIEnv *e,jclass cls){(void)e;(void)cls;return ADDRESS(stbi_failure_reason());}
 JNIEXPORT void JNICALL Java_org_lwjgl_stb_STBImage_nstbi_1image_1free(JNIEnv *e,jclass cls,jlong data){(void)e;(void)cls;stbi_image_free(POINTER(data));}
+/* One validated resize path shared by the LWJGL 3.3.3 and 3.4.1 entry points.
+   Both take a component count (1..4) rather than a stbir_pixel_layout: in this header
+   those values are STBIR_1CHANNEL, STBIR_2CHANNEL, STBIR_RGB and STBIR_RGBA. Keeping the
+   mapping in one place stops the two Java signatures from drifting apart.
+   Output is preallocated by the caller (Minecraft NativeImage owns both buffers). */
+static void *resize_uint8_checked(JNIEnv *e,jlong input,jint iw,jint ih,jint istride,
+        jlong output,jint ow,jint oh,jint ostride,jint components){
+    if(!input||!output||!layout_valid(iw,ih,components,istride)||!layout_valid(ow,oh,components,ostride)){
+        invalid(e,"Unsupported image resize layout or size (components 1..4, preallocated output required)");
+        return NULL;
+    }
+    return stbir_resize_uint8_linear(POINTER(input),iw,ih,istride,POINTER(output),ow,oh,ostride,
+            (stbir_pixel_layout)components);
+}
+/* LWJGL 3.3.3 (Minecraft 1.21.1): 9 arguments, no pixel layout, int success flag.
+   stb_image_resize v1 returns 1 on success and 0 on failure, and LWJGL exposes that as
+   boolean; the v2 helper returns a pointer, so translate it instead of truncating.
+   Minecraft's NativeImage.resizeSubRectTo discards this value, so the flag is for callers. */
+JNIEXPORT jint JNICALL Java_org_lwjgl_stb_STBImageResize_nstbir_1resize_1uint8(JNIEnv *e,jclass cls,
+        jlong input,jint iw,jint ih,jint istride,jlong output,jint ow,jint oh,jint ostride,jint components){
+    (void)cls;
+    return resize_uint8_checked(e,input,iw,ih,istride,output,ow,oh,ostride,components)!=NULL;
+}
+/* LWJGL 3.4.1 (Minecraft 26.1.2): same call with an explicit layout, long result. */
 JNIEXPORT jlong JNICALL Java_org_lwjgl_stb_STBImageResize_nstbir_1resize_1uint8_1linear(JNIEnv *e,jclass cls,jlong input,jint iw,jint ih,jint istride,jlong output,jint ow,jint oh,jint ostride,jint layout){
     (void)cls;
-    /* NativeImage passes its component count, i.e. layouts 1..4. Other STB layouts remain unsupported. */
-    if(!input||!output||!layout_valid(iw,ih,layout,istride)||!layout_valid(ow,oh,layout,ostride)){
-        invalid(e,"Unsupported image resize layout or size (components 1..4, preallocated output required)");return 0;
-    }
-    return ADDRESS(stbir_resize_uint8_linear(POINTER(input),iw,ih,istride,POINTER(output),ow,oh,ostride,(stbir_pixel_layout)layout));
+    return ADDRESS(resize_uint8_checked(e,input,iw,ih,istride,output,ow,oh,ostride,layout));
 }
 JNIEXPORT jint JNICALL Java_org_lwjgl_stb_STBImageWrite_nstbi_1write_1png_1to_1func(JNIEnv *e,jclass cls,jlong function,jlong user,jint width,jint height,jint components,jlong data,jint stride){
     (void)cls;

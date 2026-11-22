@@ -17,7 +17,9 @@ from pathlib import Path
 
 from bootstrap_toolchain import sha256
 from capture import ROOT, capture
-from graphics_common import register_tree
+from graphics_common import (expected_lwjgl_version, lwjgl_jar, owned_client_references,
+                             register_tree, select_lwjgl_opengl)
+from game_versions import DEFAULT_VERSION
 
 JTYPES = {"V": "void", "Z": "jboolean", "B": "jbyte", "C": "jchar",
           "S": "jshort", "I": "jint", "J": "jlong", "F": "jfloat", "D": "jdouble"}
@@ -123,10 +125,41 @@ def main(argv=None):
     parser.add_argument("--osmesa", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--java-home", type=Path, required=True)
+    parser.add_argument("--prepared", type=Path,
+                        help="prepared client directory whose referenceLibraries pin the OpenGL jar")
+    parser.add_argument("--owned-client", type=Path,
+                        help="verified owned-client directory; use instead of --prepared")
+    parser.add_argument("--minecraft-version", default=None,
+                        help="selected Minecraft line; defaults to the prepared record or " + DEFAULT_VERSION)
     parser.add_argument("--sdk", choices=("iphoneos", "iphonesimulator"), default="iphoneos")
     args = parser.parse_args(argv)
+    if args.prepared is not None and args.owned_client is not None:
+        parser.error("choose either --prepared or --owned-client, not both")
     jar = args.lwjgl_opengl.resolve(strict=True)
     osmesa = args.osmesa.resolve(strict=True)
+    prepared = None
+    references = None
+    if args.prepared is not None:
+        prepared = json.loads((args.prepared.resolve(strict=True) / "result.json").read_text())
+        references = prepared.get("referenceLibraries")
+    minecraft_version = args.minecraft_version or (
+        prepared.get("minecraftVersion", DEFAULT_VERSION) if prepared else DEFAULT_VERSION)
+    if args.owned_client is not None:
+        try:
+            references = owned_client_references(args.owned_client, minecraft_version)
+        except (OSError, ValueError) as error:
+            parser.error(str(error))
+    expected = expected_lwjgl_version(minecraft_version)
+    parsed = lwjgl_jar(jar)
+    if parsed is None or parsed[0] != "lwjgl-opengl" or parsed[2]:
+        parser.error("--lwjgl-opengl must be the non-native lwjgl-opengl jar: " + jar.name)
+    if parsed[1] != expected:
+        parser.error("Minecraft " + minecraft_version + " needs LWJGL " + expected +
+                     " OpenGL, got " + parsed[1])
+    if references is not None:
+        entry = select_lwjgl_opengl(references, minecraft_version)
+        if Path(entry["path"]).name != jar.name or entry.get("sha256") != sha256(jar):
+            parser.error("--lwjgl-opengl is not the hash-pinned prepared OpenGL jar")
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     home = args.java_home.resolve(strict=True)
@@ -146,6 +179,9 @@ def main(argv=None):
               "availableMethods": sum(1 for row in records if row["available"]),
               "unavailableMethods": sorted(row["gl"] for row in records if not row["available"]),
               "scope": "JNI forwarding to Mesa OSMesa; no game execution or device acceptance",
+              "minecraftVersion": minecraft_version, "lwjglVersion": expected,
+              "prepared": str(Path(args.prepared).resolve()) if args.prepared else None,
+              "ownedClient": str(Path(args.owned_client).resolve()) if args.owned_client else None,
               "lwjglOpenGLJar": str(jar), "lwjglOpenGLJarSHA256": sha256(jar),
               "osmesa": str(osmesa), "osmesaSHA256": sha256(osmesa),
               "sourcesSHA256": {str(Path(__file__).relative_to(ROOT)): sha256(Path(__file__))}}

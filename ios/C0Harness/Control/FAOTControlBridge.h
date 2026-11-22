@@ -40,6 +40,7 @@ FOUNDATION_EXPORT BOOL FAOTControlDeleteLayout(NSString *name);
 
 /// Sends input to the running game. No-ops when no game surface exists.
 FOUNDATION_EXPORT void FAOTControlSendKey(int keycode, BOOL down);
+FOUNDATION_EXPORT void FAOTControlSetInputTarget(void *window, void *enqueue);
 FOUNDATION_EXPORT void FAOTControlSendMouseButton(int button, BOOL down);
 FOUNDATION_EXPORT void FAOTControlSendScroll(double dy);
 FOUNDATION_EXPORT void FAOTControlSendCursorDelta(double dx, double dy);

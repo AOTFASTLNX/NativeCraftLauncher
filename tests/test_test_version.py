@@ -1,4 +1,5 @@
 import json
+import plistlib
 from pathlib import Path
 import subprocess
 import sys
@@ -11,6 +12,27 @@ import mcfao
 import desktop_workbench as w
 
 class TestVersionTests(unittest.TestCase):
+    def test_each_game_app_template_expands_the_selected_game_profile(self):
+        root=Path(__file__).resolve().parents[1]
+        for name in ('Info.plist','Info.WorldSimulator.plist'):
+            info=plistlib.loads((root/'ios/C0Harness'/name).read_bytes())
+            self.assertEqual(info['FAOTMinecraftVersion'],'$(FAOT_MINECRAFT_VERSION)')
+            self.assertEqual(info['FAOTAssetIndex'],'$(FAOT_ASSET_INDEX)')
+
+    def test_game_profile_drives_xcode_settings_and_package_verification(self):
+        argv=mcfao.device_xcode(Path('/tmp/stage'),Path('/tmp/assets'),team='',unsigned=True,
+                               minecraft_version='1.21.1',asset_index='17')
+        self.assertIn('FAOT_MINECRAFT_VERSION=1.21.1',argv)
+        self.assertIn('FAOT_ASSET_INDEX=17',argv)
+        with tempfile.TemporaryDirectory() as temp:
+            app=Path(temp)
+            inputs=dict(version='1.21.1',assetIndex='17')
+            (app/'Info.plist').write_bytes(plistlib.dumps(dict(FAOTMinecraftVersion='1.21.1',FAOTAssetIndex='17')))
+            mcfao.validate_game_profile(app,inputs)
+            with self.assertRaisesRegex(ValueError,'Minecraft version or asset index'):
+                mcfao.validate_game_profile(app,dict(version='26.1.2',assetIndex='30'))
+        with self.assertRaises(ValueError):
+            mcfao.device_xcode(Path('/tmp/stage'),Path('/tmp/assets'),team='',asset_index='17=x')
     def test_labels_and_optional_default(self):
         self.assertEqual(test_version(None),'')
         self.assertEqual(test_version('  '),'')
@@ -48,6 +70,8 @@ class TestVersionTests(unittest.TestCase):
             source=Path(temp)/'test.m';binary=Path(temp)/'test'
             source.write_text('''#import "test_version.h"
 int main(void) { @autoreleasepool {
+ if (![FAOTMinecraftVersionFromInfo(@{ @"FAOTMinecraftVersion": @"1.21.1" }) isEqualToString:@"1.21.1"]) return 3;
+ if (![FAOTMinecraftVersionFromInfo(@{}) isEqualToString:@"26.1.2"]) return 4;
  for (NSDictionary *info in @[@{}, @{ @"FAOTTestVersion": @"" }, @{ @"FAOTTestVersion": @"$(FAOT_TEST_VERSION)" }, @{ @"FAOTTestVersion": @"../escape" }]) {
   NSString *label=FAOTTestVersionFromInfo(info);
   if (label.length || [FAOTTestVersionSubtitle(label) containsString:@"测试版本"] || ![FAOTTestVersionLogName(label,123) isEqualToString:@"run-123.log"]) return 1;

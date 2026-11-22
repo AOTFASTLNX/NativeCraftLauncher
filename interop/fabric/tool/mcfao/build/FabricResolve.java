@@ -24,6 +24,10 @@ final class FabricResolve {
     private FabricResolve() {}
 
     static Map<String, ?> resolve(Path client, Path work, Path mods) throws ModResolutionException {
+        return resolve(client, work, mods, "26.1.2");
+    }
+
+    static Map<String, ?> resolve(Path client, Path work, Path mods, String version) throws ModResolutionException {
         // Construction registers the production launcher and client side. Do not
         // call Knot.init, FabricLoaderImpl.load/freeze, or any game/mod entrypoint.
         new Knot(EnvType.CLIENT);
@@ -34,7 +38,7 @@ final class FabricResolve {
             }
 
             @Override public Collection<BuiltinMod> getBuiltinMods() {
-                var metadata = new BuiltinModMetadata.Builder("minecraft", "26.1.2").setName("Minecraft").build();
+                var metadata = new BuiltinModMetadata.Builder("minecraft", version).setName("Minecraft").build();
                 return List.of(new BuiltinMod(List.of(client), metadata));
             }
         });

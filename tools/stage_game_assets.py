@@ -12,13 +12,16 @@ from pathlib import Path
 from bootstrap_toolchain import sha256
 from graphics_common import register_tree
 from artifact_copy import copy_artifact
+from game_versions import get_profile
 
 def fetch_verified(url:str,target:Path,size:int,digest:str):
     from verified_download import fetch, GAME_HOSTS
     fetch(dict(url=url, size=size, sha1=digest), target, GAME_HOSTS)
 
 def verified_assets(source:Path, metadata:dict,download:Path|None=None):
-    if metadata.get('id')!='26.1.2':raise ValueError('Exact 26.1.2 version metadata required')
+    # The asset layout is identical across supported versions; the declared id
+    # must still be one this build can consume.
+    get_profile(metadata.get('id'))
     spec=metadata['assetIndex'];index_id=spec['id']
     if not re.fullmatch(r'[0-9]+',index_id):raise ValueError('Invalid asset index ID')
     index=source/'indexes'/f'{index_id}.json'
