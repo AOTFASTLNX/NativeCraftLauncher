@@ -123,8 +123,16 @@ test("client grading filters combine with categories and keep selection independ
     .getByRole("button", { name: /^Mod/ })
     .click();
   await expect(page.getByRole("checkbox")).toHaveCount(1);
-  await page.getByRole("button", { name: "保留当前列表", exact: true }).click();
+  await page.getByRole("button", { name: "全选当前列表", exact: true }).click();
   await expect(page.getByRole("checkbox")).toBeChecked();
+  await expect(
+    page
+      .locator(".section-heading-meta")
+      .getByText(/已保留\s*\d+\s*\/\s*\d+\s*项/),
+  ).toBeVisible();
+  await expect(
+    page.getByText("取消勾选仅影响本次构建，原整合包文件保持完整。"),
+  ).toHaveCount(0);
   await grades.getByRole("button", { name: /^客户端必需/ }).click();
   await expect(page.getByRole("checkbox")).toHaveCount(1);
   await page.getByRole("checkbox").uncheck();

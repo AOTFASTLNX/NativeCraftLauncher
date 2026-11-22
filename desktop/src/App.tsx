@@ -78,7 +78,7 @@ import {
   type Checks,
 } from "./workflow";
 import ModList from "./ModList";
-import ResourceManager from "./ResourceManager";
+import ResourceManager, { resourceRetention } from "./ResourceManager";
 import { LogView } from "./LogView";
 import { SelectMenu } from "./SelectMenu";
 import {
@@ -861,6 +861,10 @@ export default function App() {
       ? `${busy}，请等待完成。`
       : blockedReason;
   const currentReport = report?.source === form.source ? report : null;
+  const headingRetention = resourceRetention(
+    currentReport,
+    form.resourceSelection,
+  );
   const steps =
     form.loader === "fabric"
       ? ["游戏内容", "资源管理", "构建环境", "开发签名", "确认构建"]
@@ -1939,19 +1943,36 @@ export default function App() {
                     >
                       <div className="section-heading">
                         <span className="eyebrow">STEP 0{visibleStep + 1}</span>
-                        <h2>
-                          {
-                            [
-                              "选择要构建的游戏内容",
-                              ...(form.loader === "fabric"
-                                ? ["管理整合包资源"]
-                                : []),
-                              "准备你的构建环境",
-                              "设置开发签名",
-                              "准备好，开始构建。",
-                            ][visibleStep]
-                          }
-                        </h2>
+                        <div className="section-heading-title">
+                          <h2>
+                            {
+                              [
+                                "选择要构建的游戏内容",
+                                ...(form.loader === "fabric"
+                                  ? ["管理整合包资源"]
+                                  : []),
+                                "准备你的构建环境",
+                                "设置开发签名",
+                                "准备好，开始构建。",
+                              ][visibleStep]
+                            }
+                          </h2>
+                          {visibleStep === 1 &&
+                            form.loader === "fabric" &&
+                            headingRetention && (
+                              <span className="section-heading-meta">
+                                已保留{" "}
+                                <AnimatedNumber
+                                  value={headingRetention.kept.size}
+                                />{" "}
+                                /{" "}
+                                <AnimatedNumber
+                                  value={headingRetention.total}
+                                />{" "}
+                                项
+                              </span>
+                            )}
+                        </div>
                         <p>
                           {
                             [
