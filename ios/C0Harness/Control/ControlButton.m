@@ -89,6 +89,7 @@
 - (void)preProcessProperties {
     CGFloat currentScale = [((ControlLayout *)self.superview).layoutDictionary[@"scaledAt"] floatValue];
     CGFloat savedScale = getPrefFloat(@"control.button_scale");
+    if (currentScale <= 0) currentScale = savedScale;
     if (currentScale != savedScale) {
         self.properties[@"width"] = @([self.properties[@"width"] floatValue] * savedScale / currentScale);
         self.properties[@"height"] = @([self.properties[@"height"] floatValue] * savedScale / currentScale);
@@ -234,6 +235,7 @@
     self.frame = frame;
 
     for (ControlButton *button in self.superview.subviews) {
+        if (![button isKindOfClass:ControlButton.class]) continue;
         //Step 1: Filter unwanted buttons
         if (![self canSnap:button]) continue;
         

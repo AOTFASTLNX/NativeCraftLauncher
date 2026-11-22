@@ -1,4 +1,5 @@
 #import "CustomControlsViewController.h"
+#import <PhotosUI/PhotosUI.h>
 #import "DBNumberedSlider.h"
 #import "FileListViewController.h"
 #import "FAOTControlCompat.h"
@@ -14,12 +15,15 @@
 // Nothing
 @end
 
-@interface CustomControlsViewController () <UIGestureRecognizerDelegate, UIPopoverPresentationControllerDelegate>{
+@interface CustomControlsViewController () <UIGestureRecognizerDelegate, UIPopoverPresentationControllerDelegate, PHPickerViewControllerDelegate>{
 }
 
 @property(nonatomic) NSString* currentFileName;
 @property(nonatomic) CGRect selectedPoint;
 @property(nonatomic) UINavigationBar* navigationBar;
+@property(nonatomic) UIStackView *editorToolbar;
+@property(nonatomic) UIImageView *referenceImageView;
+@property(nonatomic) NSUInteger referenceImageGeneration;
 
 @end
 
@@ -48,10 +52,15 @@
     guideLabel.textColor = UIColor.whiteColor;
     guideLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightRegular];
     guideLabel.userInteractionEnabled = NO;
-    guideLabel.text = localize(@"custom_controls.hint", nil);
+    guideLabel.text = @"点按控件编辑 · 拖动移动 · 拖动圆形手柄缩放";
     [self.view addSubview:guideLabel]; 
 
-    self.ctrlView = [[ControlLayout alloc] initWithFrame:getSafeArea(self.view.frame)];
+    self.referenceImageView = [[UIImageView alloc] initWithFrame:self.view.bounds];
+    self.referenceImageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.referenceImageView.contentMode = UIViewContentModeScaleAspectFit;
+    self.referenceImageView.userInteractionEnabled = NO;
+    [self.view addSubview:self.referenceImageView];
+    self.ctrlView = [[ControlLayout alloc] initWithFrame:getSafeArea(self.view.bounds)];
     self.ctrlView.layer.borderColor = UIColor.labelColor.CGColor;
     [self.view addSubview:self.ctrlView];
 
@@ -71,9 +80,7 @@
     self.navigationBar.translucent = YES;
     [self.view addSubview:self.navigationBar];
 
-    CGFloat buttonScale = getPrefFloat(@"control.button_scale") / 100.0;
-
-    self.resizeView = [[ControlHandleView alloc] initWithFrame:CGRectMake(0, 0, 30, 30)];
+    self.resizeView = [[ControlHandleView alloc] initWithFrame:CGRectMake(0, 0, 44, 44)];
     self.resizeView.backgroundColor = self.view.tintColor;
     self.resizeView.layer.cornerRadius = self.resizeView.frame.size.width / 2;
     self.resizeView.clipsToBounds = YES;
@@ -97,11 +104,99 @@
     NSString *fileName = self.getDefaultCtrl ? self.getDefaultCtrl() : FAOTControlActiveLayoutName();
     self.currentFileName = [fileName stringByDeletingPathExtension];
     [self loadControlFile:fileName];
+
+    UIButton *done = [UIButton buttonWithType:UIButtonTypeSystem];
+    [done setTitle:@"完成" forState:UIControlStateNormal];
+    [done addTarget:self action:@selector(actionMenuExit) forControlEvents:UIControlEventTouchUpInside];
+    UIButton *save = [UIButton buttonWithType:UIButtonTypeSystem];
+    [save setTitle:@"保存" forState:UIControlStateNormal];
+    [save addTarget:self action:@selector(actionMenuSave) forControlEvents:UIControlEventTouchUpInside];
+    UIButton *more = [UIButton buttonWithType:UIButtonTypeSystem];
+    [more setTitle:@"添加 / 更多" forState:UIControlStateNormal];
+    __weak typeof(self) weakSelf = self;
+    more.menu = [UIMenu menuWithTitle:@"布局操作" children:@[
+        [UIAction actionWithTitle:@"添加按键" image:nil identifier:nil handler:^(__kindof UIAction *a) { [weakSelf addAtCenter:@selector(actionMenuAddButton)]; }],
+        [UIAction actionWithTitle:@"添加摇杆" image:nil identifier:nil handler:^(__kindof UIAction *a) { [weakSelf addAtCenter:@selector(actionMenuAddJoystick)]; }],
+        [UIAction actionWithTitle:@"添加抽屉" image:nil identifier:nil handler:^(__kindof UIAction *a) { [weakSelf addAtCenter:@selector(actionMenuAddDrawer)]; }],
+        [UIAction actionWithTitle:@"导入参考图" image:nil identifier:nil handler:^(__kindof UIAction *a) { [weakSelf importReferenceImage]; }],
+        [UIAction actionWithTitle:@"清除参考图" image:nil identifier:nil handler:^(__kindof UIAction *a) { [weakSelf clearReferenceImage]; }],
+        [UIAction actionWithTitle:@"调整安全区" image:nil identifier:nil handler:^(__kindof UIAction *a) { [weakSelf actionMenuSafeArea]; }],
+        [UIAction actionWithTitle:@"载入布局" image:nil identifier:nil handler:^(__kindof UIAction *a) { [weakSelf actionMenuLoad]; }]
+    ]];
+    more.showsMenuAsPrimaryAction = YES;
+    self.editorToolbar = [[UIStackView alloc] initWithArrangedSubviews:@[done, save, more]];
+    self.editorToolbar.spacing = 8;
+    self.editorToolbar.distribution = UIStackViewDistributionFillEqually;
+    self.editorToolbar.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.92];
+    self.editorToolbar.layer.cornerRadius = 10;
+    self.editorToolbar.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.editorToolbar];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.editorToolbar.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],
+        [self.editorToolbar.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+        [self.editorToolbar.heightAnchor constraintEqualToConstant:44],
+        [self.editorToolbar.widthAnchor constraintEqualToConstant:300],
+        [self.editorToolbar.widthAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.widthAnchor constant:-16]
+    ]];
+}
+
+- (void)importReferenceImage {
+    PHPickerConfiguration *configuration = [[PHPickerConfiguration alloc] init];
+    configuration.filter = [PHPickerFilter imagesFilter];
+    configuration.selectionLimit = 1;
+    PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:configuration];
+    picker.delegate = self;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)clearReferenceImage {
+    self.referenceImageGeneration++;
+    self.referenceImageView.image = nil;
+}
+
+- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
+    [picker dismissViewControllerAnimated:YES completion:^{
+        if (results.count != 0) [self loadReferenceImageFromProvider:results.firstObject.itemProvider];
+    }];
+}
+
+- (void)loadReferenceImageFromProvider:(NSItemProvider *)provider {
+    NSUInteger generation = ++self.referenceImageGeneration;
+    __weak typeof(self) weakSelf = self;
+    if (![provider canLoadObjectOfClass:UIImage.class]) {
+        [self showReferenceImageError];
+        return;
+    }
+    [provider loadObjectOfClass:UIImage.class completionHandler:^(id<NSItemProviderReading> image, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf || generation != strongSelf.referenceImageGeneration) return;
+            if (error || ![image isKindOfClass:UIImage.class]) {
+                [strongSelf showReferenceImageError];
+                return;
+            }
+            strongSelf.referenceImageView.image = (UIImage *)image;
+        });
+    }];
+}
+
+- (void)showReferenceImageError {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"无法导入参考图"
+        message:@"图片加载失败，请重新选择。" preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)addAtCenter:(SEL)action {
+    self.selectedPoint = CGRectMake(CGRectGetMidX(self.ctrlView.bounds), CGRectGetMidY(self.ctrlView.bounds), 1, 1);
+    if (action == @selector(actionMenuAddButton)) [self actionMenuAddButton];
+    else if (action == @selector(actionMenuAddJoystick)) [self actionMenuAddJoystick];
+    else if (action == @selector(actionMenuAddDrawer)) [self actionMenuAddDrawer];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
-    isControlModifiable = NO;
+    if (self.isBeingDismissed) isControlModifiable = NO;
     if (isInGame) {
         [self.presentingViewController performSelector:@selector(loadCustomControls)];
     }
@@ -157,7 +252,7 @@
         clamp(self.ctrlView.frame.size.width * sender.scale, self.view.frame.size.width / 2, self.view.frame.size.width),
         clamp(self.ctrlView.frame.size.height * sender.scale, self.view.frame.size.height / 2, self.view.frame.size.height)
     );
-    self.resizeView.frame = CGRectMake(CGRectGetMaxX(self.ctrlView.frame), CGRectGetMaxY(self.ctrlView.frame), self.resizeView.frame.size.width, self.resizeView.frame.size.height);
+    self.resizeView.frame = CGRectMake(CGRectGetMaxX(self.ctrlView.frame) - self.resizeView.frame.size.width, CGRectGetMaxY(self.ctrlView.frame) - self.resizeView.frame.size.height, self.resizeView.frame.size.width, self.resizeView.frame.size.height);
 
     previous = current;
 
@@ -175,8 +270,9 @@
 }
 
 - (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
     if (self.navigationBar.hidden) {
-        self.ctrlView.frame = getSafeArea(self.view.frame);
+        self.ctrlView.frame = getSafeArea(self.view.bounds);
     }
 
     // Update dynamic position for each view
@@ -190,13 +286,13 @@
 - (void)changeSafeAreaSelection:(UISegmentedControl *)sender {
     switch (sender.selectedSegmentIndex) {
         case 0:
-            self.ctrlView.frame = self.view.frame;
+            self.ctrlView.frame = self.view.bounds;
             break;
         case 1:
-            self.ctrlView.frame = UIEdgeInsetsInsetRect(self.view.frame, getDefaultSafeArea());
+            self.ctrlView.frame = UIEdgeInsetsInsetRect(self.view.bounds, getDefaultSafeArea());
             break;
         case 2:
-            self.ctrlView.frame = getSafeArea(self.view.frame);
+            self.ctrlView.frame = getSafeArea(self.view.bounds);
             break;
     }
     self.ctrlView.userInteractionEnabled = sender.selectedSegmentIndex == 2;
@@ -204,10 +300,10 @@
 }
 
 - (void)loadSafeAreaSelectionFor:(UISegmentedControl *)control {
-    if (CGRectEqualToRect(self.ctrlView.frame, UIScreen.mainScreen.bounds)) {
+    if (CGRectEqualToRect(self.ctrlView.frame, self.view.bounds)) {
         control.selectedSegmentIndex = 0;
     } else {
-        control.selectedSegmentIndex = !CGRectEqualToRect(self.ctrlView.frame, UIEdgeInsetsInsetRect(self.view.frame, getDefaultSafeArea())) + 1;
+        control.selectedSegmentIndex = !CGRectEqualToRect(self.ctrlView.frame, UIEdgeInsetsInsetRect(self.view.bounds, getDefaultSafeArea())) + 1;
     }
 }
 
@@ -216,6 +312,26 @@
 
     if (sender.state != UIGestureRecognizerStateBegan &&
         sender.state != UIGestureRecognizerStateEnded) {
+        return;
+    }
+    if ([sender isKindOfClass:UILongPressGestureRecognizer.class] && sender.state != UIGestureRecognizerStateBegan) return;
+    if ([sender.view isKindOfClass:ControlButton.class]) {
+        self.selectedPoint = sender.view.bounds;
+        self.resizeView.hidden = NO;
+        self.resizeView.target = (ControlButton *)sender.view;
+        CGPoint origin = [self.ctrlView convertPoint:sender.view.frame.origin toView:self.view];
+        self.resizeView.frame = CGRectMake(origin.x + sender.view.frame.size.width - 22, origin.y + sender.view.frame.size.height - 22, 44, 44);
+        UIAlertController *sheet = [UIAlertController alertControllerWithTitle:((ControlButton *)sender.view).properties[@"name"]
+            message:@"拖动控件可移动，拖动圆形手柄可调整大小。" preferredStyle:UIAlertControllerStyleActionSheet];
+        [sheet addAction:[UIAlertAction actionWithTitle:@"编辑" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) { [self actionMenuBtnEdit]; }]];
+        if ([sender.view isKindOfClass:ControlDrawer.class]) {
+            [sheet addAction:[UIAlertAction actionWithTitle:@"添加抽屉按键" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) { [self actionMenuAddSubButton]; }]];
+        }
+        [sheet addAction:[UIAlertAction actionWithTitle:@"删除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) { [self actionMenuBtnDelete]; }]];
+        [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+        sheet.popoverPresentationController.sourceView = sender.view;
+        sheet.popoverPresentationController.sourceRect = sender.view.bounds;
+        [self presentViewController:sheet animated:YES completion:nil];
         return;
     }
 
@@ -276,13 +392,18 @@
     [controller addAction:[UIAlertAction actionWithTitle:localize(@"OK", nil) style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         NSArray *textFields = controller.textFields;
         UITextField *field = textFields[0];
+        NSString *path = FAOTControlMapPath(field.text);
+        NSString *failedPath = self.ctrlView.failedLayoutName ? FAOTControlMapPath(self.ctrlView.failedLayoutName) : nil;
+        if (path && failedPath && [path isEqualToString:failedPath]) {
+            showDialog(@"无法覆盖原布局", @"原布局读取失败。请使用其他名称保存，原文件将被保留。");
+            return;
+        }
         NSError *error;
         NSData *jsonData = [NSJSONSerialization dataWithJSONObject:self.ctrlView.layoutDictionary options:NSJSONWritingPrettyPrinted error:&error];
         if (jsonData == nil) {
             showDialog(localize(@"custom_controls.control_menu.save.error.json", nil), error.localizedDescription);
             return;
         }
-        NSString *path = FAOTControlMapPath(field.text);
         BOOL success = path && [jsonData writeToFile:path options:NSDataWritingAtomic error:&error];
         if (!success) {
             showDialog(localize(@"custom_controls.control_menu.save.error.write", nil), path ? error.localizedDescription : @"布局名称无效");
@@ -290,6 +411,7 @@
         }
 
         if (self.setDefaultCtrl) self.setDefaultCtrl(field.text);
+        self.ctrlView.failedLayoutName = nil;
 
         if (exit) {
             [self dismissViewControllerAnimated:!isInGame completion:nil];
@@ -336,27 +458,29 @@
 }
 
 - (void)actionMenuSafeArea {
-    // Set _UIBarBackground alpha to 0.8
-    self.navigationBar.subviews[0].alpha = 0.8;
+    [self loadSafeAreaSelectionFor:(UISegmentedControl *)self.navigationBar.items[0].titleView];
 
     BOOL isCustom = ((UISegmentedControl *)self.navigationBar.items[0].titleView).selectedSegmentIndex == 2;
 
     self.navigationBar.hidden = !self.navigationBar.hidden;
+    self.editorToolbar.hidden = !self.navigationBar.hidden;
+    [self.view bringSubviewToFront:self.navigationBar];
     self.ctrlView.layer.borderWidth = self.navigationBar.hidden ? 0 : 2;
     self.ctrlView.userInteractionEnabled = self.navigationBar.hidden || isCustom;
-    self.resizeView.frame = CGRectMake(CGRectGetMaxX(self.ctrlView.frame), CGRectGetMaxY(self.ctrlView.frame), self.resizeView.frame.size.width, self.resizeView.frame.size.height);
+    self.resizeView.frame = CGRectMake(CGRectGetMaxX(self.ctrlView.frame) - self.resizeView.frame.size.width, CGRectGetMaxY(self.ctrlView.frame) - self.resizeView.frame.size.height, self.resizeView.frame.size.width, self.resizeView.frame.size.height);
+    [self.view bringSubviewToFront:self.resizeView];
     self.resizeView.hidden = self.navigationBar.hidden || !isCustom;
     self.resizeView.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner | kCALayerMinXMaxYCorner;
     self.resizeView.target = nil;
 }
 
 - (void)actionMenuSafeAreaCancel {
-    self.ctrlView.frame = getSafeArea(self.view.frame);
+    self.ctrlView.frame = getSafeArea(self.view.bounds);
     [self actionMenuSafeArea];
 }
 
 - (void)actionMenuSafeAreaDone {
-    setSafeArea(self.view.frame.size, self.ctrlView.frame);
+    setSafeArea(self.view.bounds.size, self.ctrlView.frame);
     [self actionMenuSafeArea];
 }
 
@@ -504,8 +628,8 @@
 
     // Perform safe area resize
     CGRect targetFrame = self.ctrlView.frame;
-    targetFrame.size.width += translation.x;
-    targetFrame.size.height += translation.y;
+    targetFrame.size.width = clamp(targetFrame.size.width + translation.x, self.view.bounds.size.width / 2, self.view.bounds.size.width - targetFrame.origin.x);
+    targetFrame.size.height = clamp(targetFrame.size.height + translation.y, self.view.bounds.size.height / 2, self.view.bounds.size.height - targetFrame.origin.y);
     self.ctrlView.frame = targetFrame;
 
     // Keep track of handle view location
@@ -538,8 +662,8 @@
             [sender setTranslation:CGPointZero inView:sender.view];
 
             // Keep track of handle view location
-            self.resizeView.frame = CGRectMake(CGRectGetMaxX(self.resizeView.target.frame), CGRectGetMaxY(self.resizeView.target.frame),
-                self.resizeView.frame.size.width, self.resizeView.frame.size.height);
+            CGRect target = [self.ctrlView convertRect:self.resizeView.target.frame toView:self.view];
+            self.resizeView.frame = CGRectMake(CGRectGetMaxX(target) - 22, CGRectGetMaxY(target) - 22, 44, 44);
         } break;
         case UIGestureRecognizerStateCancelled:
         case UIGestureRecognizerStateEnded: {
@@ -578,7 +702,8 @@
             //button.center = CGPointMake(button.center.x + translation.x, button.center.y + translation.y);
             [button snapAndAlignX:clamp(button.frame.origin.x+translation.x, 0, self.ctrlView.frame.size.width - button.frame.size.width) Y:clamp(button.frame.origin.y+translation.y, 0, self.ctrlView.frame.size.height - button.frame.size.height)];
             [sender setTranslation:CGPointZero inView:button];
-            self.resizeView.frame = CGRectMake(CGRectGetMaxX(button.frame), CGRectGetMaxY(button.frame), self.resizeView.frame.size.width, self.resizeView.frame.size.height);
+            CGRect target = [self.ctrlView convertRect:button.frame toView:self.view];
+            self.resizeView.frame = CGRectMake(CGRectGetMaxX(target) - 22, CGRectGetMaxY(target) - 22, 44, 44);
         } break;
         case UIGestureRecognizerStateCancelled:
         case UIGestureRecognizerStateEnded: {

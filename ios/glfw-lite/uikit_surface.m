@@ -13,6 +13,7 @@
    also built standalone for CI, so it reaches the surface through the ObjC runtime instead
    of linking the app's control layer. */
 @protocol FAOTControlSurface <NSObject>
+- (void)setInputWindow:(void *)window enqueue:(void *)enqueue;
 - (BOOL)loadLayoutNamed:(NSString *)name error:(NSString *_Nullable *_Nullable)error;
 - (void)setCaptured:(BOOL)captured;
 - (void)releaseAllInput;
@@ -112,6 +113,7 @@ static UIWindowScene *activeScene(void) {
     }
     UIView<FAOTControlSurface> *controls=[(UIView<FAOTControlSurface> *)[controlsClass alloc] initWithFrame:self.bounds];
     controls.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+    [controls setInputWindow:self.handle enqueue:(void *)faot_glfw_enqueue];
     [controls setCaptured:self.captured];
     NSString *name=[NSUserDefaults.standardUserDefaults stringForKey:@"FAOTControlLayout"];
     if(!name.length)name=@"default";
@@ -492,6 +494,7 @@ void faot_surface_destroy(void *raw) {
         [surface.refreshLink invalidate];
         surface.refreshLink=nil;
         surface.view.handle=NULL;
+        [surface.view.controls setInputWindow:NULL enqueue:NULL];
         NSNotificationCenter *nc=NSNotificationCenter.defaultCenter;
         if(surface.foregroundToken)[nc removeObserver:surface.foregroundToken];
         if(surface.backgroundToken)[nc removeObserver:surface.backgroundToken];

@@ -632,7 +632,7 @@ static const CGFloat kTransitionBlurDrift = 22.0;
                                                      layoutName:layoutName
                                                      completion:^(FAOTControlLayout *updated, BOOL saved) {
         if (saved) {
-            FAOTLauncherSettings.shared.layoutName = layoutName;
+            FAOTLauncherSettings.shared.layoutName = FAOTControlActiveLayoutName();
             [(id<FAOTLauncherPage>)weakSelf.pages[@"settings"] refreshPage];
         }
     }];
