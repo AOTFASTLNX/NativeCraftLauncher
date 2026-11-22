@@ -27,6 +27,7 @@ from build_c0_harness import binary_platform, validate_dylib, validate_shader_bu
 from capture import ROOT, capture
 from bundle_source import source_identity
 from test_version import test_version, ipa_filename
+from loader_selection import default_version
 from graphics_common import bridge_overlays, verify_gl41_bridge
 from native_game_checks import verify_game_image
 from build_glfw_lite import exported_symbols, validate_input_exports
@@ -141,7 +142,8 @@ def asset_files(assets: Path, metadata: Path) -> dict:
     return actual
 
 
-def inputs(config: dict, renderer: str = DEFAULT_RENDERER) -> tuple[dict, Path, list[Path]]:
+def inputs(config: dict, renderer: str = DEFAULT_RENDERER,
+           fabric_loader: str | None = None) -> tuple[dict, Path, list[Path]]:
     prepared = read_json(config["prepared"] / "result.json")
     if prepared["status"] != "PREPARED":
         raise ValueError("Expected a verified PREPARED client reference")
@@ -157,7 +159,14 @@ def inputs(config: dict, renderer: str = DEFAULT_RENDERER) -> tuple[dict, Path, 
             raise ValueError(f"Input hash changed: {path}")
         fingerprints[str(path)] = digest
 
-    for row in prepared["referenceLibraries"] + prepared["engineLibraries"]:
+    engine_rows = prepared["engineLibraries"]
+    if fabric_loader:
+        drivers = prepared.get("loaderDrivers") or {}
+        if fabric_loader not in drivers:
+            raise ValueError(
+                f"构建环境尚未准备 Fabric Loader {fabric_loader}；请到「环境与资源」重新准备。")
+        engine_rows = drivers[fabric_loader]["engineLibraries"]
+    for row in prepared["referenceLibraries"] + engine_rows:
         add(Path(row["path"]), row["sha256"])
     clients = [p for p in libraries if p.name == f"{VERSION}.jar" and p.parent.name == VERSION]
     if len(clients) != 1 or metadata["id"] != VERSION:
@@ -387,6 +396,8 @@ def loader_client(pipeline, args, config, client, inputs):
                     "--renderer", args.renderer,
                     "--compatibility-report", pipeline.root / "compatibility.json",
                     "--audited-mods" if args.audited_mods else "--inspect"]
+    if getattr(args, "fabric_loader", None):
+        prepare_args += ["--loader", args.fabric_loader]
     if args.trace_agent:
         prepare_args.append("--trace-agent")
     prepared = pipeline.step("fabric", script(
@@ -810,7 +821,8 @@ def build(args, config):
         if (output / "result.json").exists():
             raise ValueError("Completed build is immutable. Use verify or select a new output.")
         renderer = getattr(args, "renderer", DEFAULT_RENDERER)
-        manifest, client, libraries = inputs(config, renderer)
+        fabric_loader = getattr(args, "fabric_loader", None) if args.loader == "fabric" else None
+        manifest, client, libraries = inputs(config, renderer, fabric_loader)
         # Large Fabric graphs can fill Parallel GC's old generation during method layout,
         # even at the configured heap limit. G1 assigns heap regions to generations as needed.
         builder_gc = getattr(args, "builder_gc", None) or ("g1" if args.loader == "fabric" else "parallel")
@@ -851,7 +863,8 @@ def build(args, config):
             manifest["instanceSHA256"] = instance_files(instance)
         if args.loader == "fabric":
             lock = read_json(ROOT / "compiler/fabric.lock.json")
-            manifest["fabricLoaderVersion"] = lock["fabricLoader"]
+            manifest["fabricLoaderVersion"] = getattr(args, "fabric_loader", None) or default_version(lock)
+            manifest["verifiedFabricLoaders"] = [row for row in (lock.get("verifiedLoaders") or [])]
             manifest["modsSHA256"] = {str(p): sha256(p) for p in mod_files(args.mods.resolve())}
             manifest["auditedMods"] = args.audited_mods
             manifest["prepareOnly"] = args.prepare_only
@@ -1035,6 +1048,8 @@ def main(argv=None):
                                  help="Stop after Fabric metadata inspection or audited transformation")
     compile_command.add_argument("--audited-mods", action="store_true",
                                  help="Confirm these mod JARs have been audited for host build execution")
+    compile_command.add_argument("--fabric-loader", choices=("0.19.3", "0.19.5"),
+                                 help="Verified Fabric Loader to build against (default: the lock file's baseline)")
     compile_command.add_argument("--trace-agent", action="store_true",
                                  help="Collect GraalVM tracing metadata during the sandboxed audited Fabric rehearsal")
     compile_command.add_argument("--tracing-config", type=Path, action="append", default=[],
@@ -1059,6 +1074,8 @@ def main(argv=None):
             compile_command.error("Mod options are only valid for Fabric")
         if not 0 <= args.icon_padding <= 30:
             compile_command.error("--icon-padding must be between 0 and 30")
+        if args.fabric_loader and args.loader != "fabric":
+            compile_command.error("--fabric-loader is only valid for Fabric")
     # Some checkouts relocate heavy evidence, caches and Rust artifacts through
     # symlinks declared in an untracked external-storage.json. Pause before
     # creating any output when that personal mapping is unavailable.

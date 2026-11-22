@@ -809,6 +809,10 @@ export default function App() {
   const [checkingDependencies, setCheckingDependencies] = useState(false);
   const [dependencyRevision, setDependencyRevision] = useState(0);
   const [fields, setFields] = useState<Record<string, string>>({});
+  const [loaderOptions, setLoaderOptions] = useState<string[]>([
+    "0.19.3",
+    "0.19.5",
+  ]);
   const [jobs, setJobs] = useState<BuildJob[]>([]);
   const [selected, setSelected] = useState("");
   const [busy, setBusy] = useState("");
@@ -1045,7 +1049,6 @@ export default function App() {
       ...patch,
       ...(patch.source !== undefined || patch.loader !== undefined
         ? {
-            forceCompile: false,
             resourceSelection:
               (patch.source !== undefined && patch.source !== f.source) ||
               (patch.loader !== undefined && patch.loader !== f.loader)
@@ -1289,6 +1292,7 @@ export default function App() {
     if (b.setup) setSetup(b.setup);
     if (b.storage) setStoragePaths(b.storage);
     setFields(b.configFields);
+    if (b.loaders?.length) setLoaderOptions(b.loaders.map((row) => row.version));
     setJobs(b.jobs);
     setSelected(b.jobs.find((j) => isActive(j))?.id ?? b.jobs[0]?.id ?? "");
     // Report the configuration the workbench actually keeps, which may be the
@@ -1584,7 +1588,6 @@ export default function App() {
         ...f,
         source: "",
         resourceSelection: null,
-        forceCompile: false,
       }));
     }
     setPage(p);
@@ -2147,36 +2150,12 @@ export default function App() {
                                       阻断项
                                     </span>
                                   </div>
-                                  {currentReport.fabric_loader_version !==
-                                    "0.19.3" && (
-                                    <Note>
-                                      当前来源 Loader 为{" "}
-                                      {currentReport.fabric_loader_version ||
-                                        "未知"}
-                                      ，本次将使用构建器内置的
-                                      0.19.3。差异会记录在任务里，构建可以继续。
-                                    </Note>
-                                  )}
-                                  <label className="audit-check">
-                                    <input
-                                      type="checkbox"
-                                      checked={form.forceCompile}
-                                      onChange={(e) =>
-                                        update({
-                                          forceCompile: e.target.checked,
-                                        })
-                                      }
-                                    />
-                                    <span>
-                                      <strong>
-                                        强制编译（忽略 Loader 版本差异）
-                                      </strong>
-                                      <small>
-                                        使用 Fabric Loader 0.19.3
-                                        尝试构建；差异会写入任务记录，实际转换或编译失败时保留错误日志。
-                                      </small>
-                                    </span>
-                                  </label>
+                                  <p className="mod-list-hint">
+                                    来源 Loader{" "}
+                                    {currentReport.fabric_loader_version ||
+                                      "未声明"}
+                                    。构建会自动向上选择已验证版本，可在资源管理页指定。
+                                  </p>
                                   <ModList
                                     key={currentReport.source}
                                     report={currentReport}
@@ -2284,6 +2263,11 @@ export default function App() {
                           key={form.source}
                           report={currentReport}
                           selection={form.resourceSelection}
+                          loaderVersion={form.loaderVersion}
+                          loaderOptions={loaderOptions}
+                          onLoaderChange={(loaderVersion) =>
+                            update({ loaderVersion })
+                          }
                           onChange={(resourceSelection) =>
                             update({ resourceSelection })
                           }
@@ -2554,10 +2538,13 @@ export default function App() {
                                 "OpenGL 兼容 · GL41 / Zink / MoltenVK",
                               ],
                               [
-                                "编译方式",
-                                form.loader === "fabric" && form.forceCompile
-                                  ? "强制编译 · Fabric Loader 0.19.3"
-                                  : "标准检查",
+                                "Fabric Loader",
+                                form.loader === "fabric"
+                                  ? form.loaderVersion === "auto" ||
+                                    !form.loaderVersion
+                                    ? "自动（向上取已验证版本）"
+                                    : form.loaderVersion
+                                  : "不适用",
                               ],
                               [
                                 "签名团队",
@@ -2813,16 +2800,17 @@ export default function App() {
                             }) : undefined}
                           />
                         )}
-                        {job.request.forceCompile &&
-                          !job.request.existingBuild && (
-                            <Note>
-                              此任务启用了强制编译。
-                              {job.compatibilityOverrides
-                                ?.map((override) => override.message)
-                                .join("；") ||
-                                "使用构建器内置的 Fabric Loader 0.19.3。"}
-                            </Note>
-                          )}
+                        {!!job.loaderSelection && (
+                          <Note>
+                            Fabric Loader {job.loaderSelection.version}
+                            {job.loaderSelection.automatic
+                              ? " · 自动选择"
+                              : " · 手动指定"}
+                            {job.loaderSelection.note
+                              ? "；" + job.loaderSelection.note
+                              : ""}
+                          </Note>
+                        )}
                         {!!job.acceptedExclusions?.length && (
                           <Note>
                             <strong>

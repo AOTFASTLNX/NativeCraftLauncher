@@ -176,19 +176,18 @@ class WorkbenchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'链接'):
             w.stage_source(source,self.root / 'stage')
 
-    def test_force_loader_override_is_explicit_and_records_both_versions(self):
+    def test_loader_override_records_both_versions(self):
         report = dict(fatal=False, findings=[], fabric_loader_version='0.19.2')
         warned = w.source_overrides(report, '0.19.3')
         self.assertEqual(warned[0]['sourceLoader'], '0.19.2')
         self.assertEqual(warned[0]['code'], 'FABRIC_LOADER_OVERRIDE')
-        self.assertEqual(w.source_overrides(report, '0.19.3', True), warned)
-        self.assertEqual(w.source_overrides(report, '0.19.3', True)[0]['buildLoader'], '0.19.3')
-        self.assertEqual(w.source_overrides(dict(report, fabric_loader_version='0.19.3'), '0.19.3', True), [])
+        self.assertEqual(w.source_overrides(report, '0.19.3')[0]['buildLoader'], '0.19.3')
+        self.assertEqual(w.source_overrides(dict(report, fabric_loader_version='0.19.3'), '0.19.3'), [])
 
-    def test_force_does_not_bypass_invalid_source(self):
+    def test_loader_selection_does_not_bypass_invalid_source(self):
         source = self.mrpack([('overrides/../outside','bad')])
         with self.assertRaises(ValueError):
-            w.stage_source(source, self.root / 'stage', force_compile=True)
+            w.stage_source(source, self.root / 'stage', loader_version='0.19.5')
         self.assertFalse((self.root / 'outside').exists())
 
     def test_force_stages_with_build_loader_and_preserves_source_report(self):
@@ -215,11 +214,12 @@ class WorkbenchTests(unittest.TestCase):
         with patch.object(w, 'workspace_path', return_value=self.root), patch.object(w, 'config_summary'), patch.object(w.native_dependencies, 'preflight'):
             self.assertEqual(w.validate_request(request), self.root)
             self.assertEqual(w.validate_request(dict(request, audited=False)), self.root)
-            with self.assertRaisesRegex(ValueError, '布尔'): w.validate_request(dict(request, forceCompile='true'))
+            with self.assertRaisesRegex(ValueError, 'Loader'): w.validate_request(dict(request, loaderVersion='0.19.4'))
             with patch.object(w.subprocess, 'Popen', return_value=SimpleNamespace(pid=12345)):
                 job = w.start(request)
         saved = w.read_json(Path(job['folder'])/'job.json')
-        self.assertEqual(saved['compatibilityOverrides'][0]['sourceLoader'], '0.19.2')
+        self.assertEqual(saved['loaderSelection']['version'], '0.19.3')
+        self.assertEqual(saved['loaderSelection']['declared'], '0.19.2')
 
     def test_mrpack_client_override_has_precedence(self):
         source = self.mrpack([('overrides/mods/fixture.jar',jar_bytes()), ('overrides/config/a.json','base'), ('client-overrides/config/a.json','client')])
@@ -462,6 +462,37 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(next(c for c in calls if c[3] == 'doctor')[5], 'gl41')
         self.assertNotIn('--prepare-only', build_command)
         self.assertEqual(w.read_json(folder/'source/source.json')['report']['fabric_loader_version'], '0.19.3')
+
+    def test_selected_loader_reaches_the_build_command_and_staged_manifest(self):
+        source = self.prism()
+        metadata = source / 'mmc-pack.json'
+        data = w.read_json(metadata); data['components'][1]['version'] = '0.19.2'; w.write_json(metadata, data)
+        lock = w.ROOT / 'compiler/fabric.lock.json'
+        request = dict(workspace=str(w.ROOT), loader='fabric', source=str(source), config='unused',
+                       exportOptions='unused', loaderVersion='0.19.5')
+        folder = self.root/'job'; folder.mkdir(); (folder/'launch').touch()
+        path = folder/'job.json'
+        w.write_json(path, dict(id='d'*32, state='queued', stage='validate', request=request,
+                                build=str(self.root/'build'), folder=str(folder),
+                                loaderSelection=dict(version='0.19.5', automatic=False)))
+        calls = []
+        def execute(argv, folder, name, update, stage, env):
+            calls.append(list(map(str, argv)))
+            if name == 'export':
+                output = Path(argv[argv.index('--output')+1]); output.mkdir()
+                ipa = output/'fixture.ipa'; ipa.write_bytes(b'fixture')
+                w.write_json(output/'result.json', dict(status='DEVELOPMENT_IPA_VERIFIED', ipa=str(ipa),
+                                                        sha256=hashlib.sha256(b'fixture').hexdigest(), bytes=7))
+        with patch.object(w, 'validate_request'), patch.object(w, 'check', return_value=dict(ready=True, checks=[])), patch.object(w, 'execute', side_effect=execute):
+            w.run_job(path)
+        job = w.read_json(path)
+        self.assertEqual(job['state'], 'succeeded', job.get('error'))
+        build_command = next(c for c in calls if c[3] == 'build')
+        self.assertEqual(build_command[build_command.index('--fabric-loader')+1], '0.19.5')
+        record = w.read_json(folder/'source/source.json')
+        self.assertEqual(record['loaderSelection']['version'], '0.19.5')
+        self.assertEqual(w.read_json(folder/'source/mmc-pack.json')['components'][1]['version'], '0.19.5')
+        self.assertTrue(lock.is_file())
 
     def test_aot_heap_follows_the_compiler_half_of_memory_ceiling(self):
         self.assertEqual(w.aot_heap_gib(18 * 1024**3), 9)

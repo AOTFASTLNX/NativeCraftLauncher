@@ -19,13 +19,18 @@ def library_path(name):
     return Path(*p.parts)
 
 
-def engine_url(name):
+def engine_url(name, spec=None):
+    """Resolve an engine jar URL, preferring the explicit URL pinned in the lock file."""
+    if isinstance(spec, dict) and isinstance(spec.get('url'), str):
+        return spec['url']
     if name.startswith('asm-'):
         artifact = name.removesuffix('-9.10.1.jar')
         return f'https://repo.maven.apache.org/maven2/org/ow2/asm/{artifact}/9.10.1/{name}'
     if name.startswith('fabric-loader-'):
-        return 'https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.19.3/' + name
-    return 'https://maven.fabricmc.net/net/fabricmc/sponge-mixin/0.17.3+mixin.0.8.7/' + name
+        version = name.removesuffix('.jar').removeprefix('fabric-loader-')
+        return f'https://maven.fabricmc.net/net/fabricmc/fabric-loader/{version}/' + name
+    version = name.removesuffix('.jar').removeprefix('sponge-mixin-')
+    return f'https://maven.fabricmc.net/net/fabricmc/sponge-mixin/{version}/' + name
 
 
 def acquire(output, owned, progress=print):
@@ -70,8 +75,9 @@ def acquire(output, owned, progress=print):
         total += artifact['size']
         if total > 1024**3 or len(jars) > 1000: raise ValueError('Client library budget exceeded')
         add(artifact, output / 'meta/libraries' / library_path(artifact['path']))
-    for spec in json.loads((ROOT / 'compiler/fabric.lock.json').read_text())['engineLibraries']:
-        add(dict(url=engine_url(spec['file']), size=spec['bytes'], sha256=spec['sha256']),
+    from loader_selection import all_engine_libraries
+    for spec in all_engine_libraries(json.loads((ROOT / 'compiler/fabric.lock.json').read_text())):
+        add(dict(url=engine_url(spec['file'], spec), size=spec['bytes'], sha256=spec['sha256']),
             output / 'meta/libraries/engine' / spec['file'], TOOL_HOSTS)
     from stage_game_assets import verified_assets
     assets = output / 'assets'

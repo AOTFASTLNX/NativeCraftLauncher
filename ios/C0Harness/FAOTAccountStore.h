@@ -62,6 +62,8 @@ typedef NS_ENUM(NSInteger, FAOTSkinModel) {
 
 @property (class, readonly) FAOTLauncherSettings *shared;
 @property (nonatomic, assign) NSInteger memoryGiB;
+/// Rendering scale relative to the device framebuffer, from 0.1 to 1.0.
+@property (nonatomic, assign) double renderScale;
 @property (nonatomic, copy) NSString *languageCode;
 @property (nonatomic, copy) NSString *layoutName;
 @property (nonatomic, assign) NSInteger logRetention;

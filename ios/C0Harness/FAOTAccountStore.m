@@ -3,11 +3,13 @@
 //
 #import "FAOTAccountStore.h"
 #import <Security/Security.h>
+#import <math.h>
 
 static NSString *const FAOTAccountMetadataKey = @"FAOTActiveAccountV2";
 static NSString *const FAOTTokenService = @"org.fabricaot.c0.accounts";
 static NSString *const FAOTTokenAccount = @"tokens";
 static NSString *const FAOTMemoryKey = @"FAOTMemoryGiB";
+static NSString *const FAOTRenderScaleKey = @"FAOTRenderScale";
 static NSString *const FAOTLanguageKey = @"FAOTLanguage";
 static NSString *const FAOTLayoutKey = @"FAOTControlLayout";
 static NSString *const FAOTOfflineNameKey = @"FAOTPlayerName";
@@ -268,6 +270,18 @@ static NSString *FAOTSafeFileName(NSString *value) {
 - (void)setMemoryGiB:(NSInteger)memoryGiB {
     NSInteger value = MAX(1, MIN(memoryGiB, [self memoryCap]));
     [NSUserDefaults.standardUserDefaults setInteger:value forKey:FAOTMemoryKey];
+}
+
+- (double)renderScale {
+    double value = [NSUserDefaults.standardUserDefaults doubleForKey:FAOTRenderScaleKey];
+    if (!(value >= 0.1 && value <= 1.0)) value = 0.8;
+    return round(value * 10.0) / 10.0;
+}
+
+- (void)setRenderScale:(double)renderScale {
+    double value = round(renderScale * 10.0) / 10.0;
+    if (!(value >= 0.1 && value <= 1.0)) value = 0.8;
+    [NSUserDefaults.standardUserDefaults setDouble:value forKey:FAOTRenderScaleKey];
 }
 
 - (NSString *)languageCode {

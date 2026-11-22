@@ -10,6 +10,7 @@ import {
   type ResourceTier,
 } from "./resourceClassification";
 import { AnimatedNumber } from "./MotionPrimitives";
+import { SelectMenu } from "./SelectMenu";
 export const resourceCategories = {
   mods: "Mod",
   resourcepacks: "材质包",
@@ -52,10 +53,16 @@ export default function ResourceManager({
   report,
   selection,
   onChange,
+  loaderVersion,
+  loaderOptions,
+  onLoaderChange,
 }: {
   report: Report | null;
   selection: ResourceSelection | null;
   onChange: (s: ResourceSelection) => void;
+  loaderVersion?: string;
+  loaderOptions: string[];
+  onLoaderChange: (value: string) => void;
 }) {
   const [category, setCategory] = useState("all");
   const [tier, setTier] = useState<ResourceTier | "all">("all");
@@ -116,6 +123,30 @@ export default function ResourceManager({
   }
   return (
     <section className="resource-manager" aria-label="整合包资源管理">
+      <div className="resource-loader">
+        <span className="resource-filter-label">Fabric Loader</span>
+        <SelectMenu
+          label="Fabric Loader"
+          value={loaderVersion || "auto"}
+          onChange={onLoaderChange}
+          options={[
+            { value: "auto", label: "自动（向上取已验证版本）" },
+            ...loaderOptions.map((version) => ({
+              value: version,
+              label: version,
+            })),
+          ]}
+        />
+        <span className="resource-loader-note">
+          {loaderVersion && loaderVersion !== "auto"
+            ? "手动指定；版本不受来源声明限制。"
+            : report.fabric_loader_version
+              ? "来源声明 " +
+                report.fabric_loader_version +
+                "；自动模式选不低于它的已验证版本。"
+              : "来源未声明 Loader；自动模式使用默认验证版本。"}
+        </span>
+      </div>
       <div className="resource-categories" aria-label="资源分类">
         {[["all", "全部"], ...Object.entries(resourceCategories)].map(
           ([key, label]) => (

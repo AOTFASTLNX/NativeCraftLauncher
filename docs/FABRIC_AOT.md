@@ -2,7 +2,7 @@
 
 ## 固定边界
 
-当前实现面向 Minecraft 26.1.2、Java 25、Fabric Loader 0.19.3、Sponge Mixin 0.8.7 和官方未混淆命名空间。版本与构建引擎指纹来自 [Fabric 锁定文件](../compiler/fabric.lock.json)。Loader 内部导出接口按该版本固定，升级 Loader 时须重新验证。
+当前实现面向 Minecraft 26.1.2、Java 25、Fabric Loader 0.19.3 / 0.19.5、Sponge Mixin 0.8.7 和官方未混淆命名空间。版本与构建引擎指纹来自 [Fabric 锁定文件](../compiler/fabric.lock.json)：`loaders` 为每个已验证版本记录自己的 Loader、Mixin 与 ASM 集合，`tools/prepare_b0.py` 用同一份驱动源码分别为它们编译。0.19.0–0.19.5 的驱动依赖签名一致，但解析语义仍需逐版本回归，因此只有列在锁文件里的版本才可选用；新增版本时须补一套 engine 指纹和一轮回归。
 
 | 环节 | 当前行为 | 验证方式 |
 |---|---|---|

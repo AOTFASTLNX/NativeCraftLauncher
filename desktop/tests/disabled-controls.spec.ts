@@ -11,7 +11,7 @@ async function desktop(page: Page, config: string) {
       loader: "vanilla",
       unsigned: true,
       source: "",
-      forceCompile: false,
+      loaderVersion: "auto",
       team: "",
       resourceSelection: null,
     };

@@ -155,17 +155,8 @@ describe("executable workflow", () => {
     expect(
       buildProblems({ ...form, team: "invalid" }, report, true).join(),
     ).toContain("Team ID"));
-  it("allows an explicit Loader override", () => {
-    expect(
-      buildProblems(
-        { ...form, forceCompile: true },
-        { ...report, fabric_loader_version: "0.19.2" },
-        true,
-      ),
-    ).toEqual([]);
-  });
-  it("keeps invalid source requirements when forcing compilation", () => {
-    const forced = { ...form, forceCompile: true };
+  it("keeps invalid source requirements when a Loader is chosen", () => {
+    const forced = { ...form, loaderVersion: "0.19.5" };
     expect(
       buildProblems(forced, { ...report, fatal: true }, true).join(),
     ).toContain("阻断");
@@ -187,10 +178,18 @@ describe("executable workflow", () => {
     expect(restored.source).toBe("");
     expect(restored.resourceSelection).toBeNull();
   });
-  it("requires force mode to be selected again after reopening", () => {
+  it("defaults the Loader choice to automatic and keeps a verified pick", () => {
     expect(
-      restoreForm(JSON.stringify({ ...form, forceCompile: true })).forceCompile,
-    ).toBe(false);
+      restoreForm(JSON.stringify({ ...form, loaderVersion: "0.19.5" }))
+        .loaderVersion,
+    ).toBe("0.19.5");
+    expect(
+      restoreForm(JSON.stringify({ ...form, loaderVersion: "0.19.4" }))
+        .loaderVersion,
+    ).toBe("auto");
+    expect(restoreForm(JSON.stringify({ ...form })).loaderVersion).toBe(
+      "auto",
+    );
   });
   it("supports vanilla without a mod source", () =>
     expect(

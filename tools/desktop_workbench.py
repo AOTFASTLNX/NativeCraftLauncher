@@ -38,6 +38,7 @@ from storage_config import storage_paths, job_roots, require_space, save_paths, 
 import native_dependencies
 import app_icon
 from test_version import test_version
+from loader_selection import select as select_loader, verified as verified_loaders
 
 ROOT = Path(__file__).resolve().parents[1]
 KEYS = ('prepared', 'caps', 'bootstrapRuntime', 'splitter', 'versionMetadata', 'assets',
@@ -177,7 +178,14 @@ def bootstrap(workspace):
         try: fields = read_json(config)
         except (OSError, ValueError): pass
     bundled = (workspace / 'bundle-manifest.json').is_file()
+    lock_file = workspace / 'compiler/fabric.lock.json'
+    try:
+        loaders = [{'version': version, 'label': version}
+                   for version in verified_loaders(read_json(lock_file))]
+    except (OSError, ValueError):
+        loaders = []
     return dict(workspace=str(workspace), bundled=bundled, setup=setup, config=str(config) if config else '', configFields=fields,
+                loaders=loaders,
                 exportOptions=str(workspace / 'ios/C0Harness/ExportOptions.plist'),
                 output=str(storage_paths(workspace)['builds']), storage={k: str(v) for k, v in storage_paths(workspace).items()}, jobs=history(workspace))
 
@@ -336,14 +344,24 @@ def storage_scan(action, request):
                 plan=updated, task=storage_service.status())
 
 
-def source_overrides(report, build_loader, force_compile=False):
+def source_overrides(report, build_loader):
+    """Record when the selected Loader differs from the pack's declaration.
+
+    Loader drift is always allowed now: the version was chosen from the verified
+    set (automatically rounded up, or picked by the user), so the difference is
+    information for the job record rather than a warning that needs consent.
+    """
     if report['fatal']:
         raise ValueError('来源检查失败：' + '; '.join(f['message'] for f in report['findings'] if f['severity'] == 'error'))
     source_loader = report.get('fabric_loader_version')
     if source_loader == build_loader: return []
     message = f'来源 Fabric Loader {source_loader} → 构建器 {build_loader}'
-    # Loader drift is recorded and the build proceeds; the override stays visible in the job.
     return [dict(code='FABRIC_LOADER_OVERRIDE', sourceLoader=source_loader, buildLoader=build_loader, message=message)]
+
+def choose_loader(workspace, report, requested=None):
+    """Select a verified Loader for this pack and record why."""
+    lock = read_json(workspace / 'compiler/fabric.lock.json')
+    return select_loader(lock, report.get('fabric_loader_version'), requested)
 
 def resource_selection(report, selection):
     if selection is None: return None  # Legacy jobs retain their recorded import policy.
@@ -363,7 +381,8 @@ def validate_request(request):
     workspace = workspace_path(request['workspace'])
     if not request.get('existingBuild'): test_version(request.get('testVersion', ''))
     if not isinstance(request.get('unsigned', False), bool): raise ValueError('未签名选项必须为布尔值')
-    if not isinstance(request.get('forceCompile', False), bool): raise ValueError('强制编译选项必须为布尔值')
+    if request.get('loaderVersion') not in (None, '', 'auto') and request['loaderVersion'] not in verified_loaders(read_json(workspace / 'compiler/fabric.lock.json')):
+        raise ValueError('请选择已验证的 Fabric Loader 版本')
     if not isinstance(request.get('quickBuild', False), bool): raise ValueError('快速构建选项必须为布尔值')
     if request.get('icon') and not isinstance(request.get('icon'), str): raise ValueError('图标路径必须是文本')
     if request.get('icon'):
@@ -397,8 +416,9 @@ def validate_request(request):
         raise ValueError('请选择专用的构建产物目录')
     if request['loader'] == 'fabric':
         report = scan_pack(resolve(request.get('source', '')))
-        loader = read_json(workspace / 'compiler/fabric.lock.json')['fabricLoader']
-        source_overrides(report, loader, request.get('forceCompile', False))
+        chosen = choose_loader(workspace, report, request.get('loaderVersion'))
+        request['fabricLoaderVersion'] = chosen['version']
+        source_overrides(report, chosen['version'])
         resource_selection(report, request.get('resourceSelection'))
     return workspace
 
@@ -440,10 +460,12 @@ def download(entry, target):
         except (OSError, ValueError, http.client.HTTPException) as e: last = e
     raise ValueError(str(last or '没有下载地址'))
 
-def stage_source(source, destination, progress=lambda _: None, cancelled=lambda: False, *, force_compile=False, selection=None):
+def stage_source(source, destination, progress=lambda _: None, cancelled=lambda: False, *, selection=None, loader_version=None):
     report = scan_pack(source)
-    loader = read_json(ROOT / 'compiler/fabric.lock.json')['fabricLoader']
-    overrides = source_overrides(report, loader, force_compile)
+    lock = read_json(ROOT / 'compiler/fabric.lock.json')
+    chosen = select_loader(lock, report.get('fabric_loader_version'), loader_version)
+    loader = chosen['version']
+    overrides = source_overrides(report, loader)
     included = resource_selection(report, selection)
     def keep(name, origin):
         if is_metadata(name): return False
@@ -534,9 +556,9 @@ def stage_source(source, destination, progress=lambda _: None, cancelled=lambda:
     for p in content_paths(game):
         if p.is_file():
             with p.open('rb') as f: hashes[str(p.relative_to(game))] = hashlib.file_digest(f, 'sha256').hexdigest()
-    write_json(game / 'import.json', dict(status='INSTANCE_FILES_IMPORTED', root=str(game.resolve()), mods=str(mods.resolve()), files={name: dict(sha256=digest, bytes=(game / name).stat().st_size) for name, digest in hashes.items()}, source=str(source), resourceSelection=selection, compatibilityOverrides=overrides))
+    write_json(game / 'import.json', dict(status='INSTANCE_FILES_IMPORTED', root=str(game.resolve()), mods=str(mods.resolve()), files={name: dict(sha256=digest, bytes=(game / name).stat().st_size) for name, digest in hashes.items()}, source=str(source), resourceSelection=selection, compatibilityOverrides=overrides, loaderSelection=chosen))
     with (game / 'import.json').open('rb') as f: hashes['import.json'] = hashlib.file_digest(f, 'sha256').hexdigest()
-    write_json(destination / 'source.json', dict(source=str(source), filesSHA256=hashes, report=staged, sourceReport=report, resourceSelection=selection, compatibilityOverrides=overrides))
+    write_json(destination / 'source.json', dict(source=str(source), filesSHA256=hashes, report=staged, sourceReport=report, resourceSelection=selection, compatibilityOverrides=overrides, loaderSelection=chosen))
     return mods, game
 
 def static_exclusion_plan(facts, source_folder):
@@ -748,6 +770,9 @@ def compile_build(command, folder, request, build, mods, game, update, env, prev
             # This flag selects the sandboxed Fabric transform path; the build
             # no longer asks for a separate audit acknowledgement in the UI.
             args += ['--mods', mods, '--audited-mods', '--instance-data', game]
+            loader_version = request.get('fabricLoaderVersion')
+            if loader_version:
+                args += ['--fabric-loader', loader_version]
         if request.get('unsigned'):
             args += ['--unsigned']
         if request.get('icon'):
@@ -853,6 +878,14 @@ def run_job(path):
     try:
         request = job['request']
         update(state='running', pid=os.getpid(), stage='validate')
+        if request.get('loader') == 'fabric' and not request.get('existingBuild'):
+            # Jobs launched before this field existed still resolve through the
+            # pack declaration, so a resumed staging step never guesses a Loader.
+            chosen = job.get('loaderSelection') or choose_loader(
+                workspace_path(request['workspace']), scan_pack(resolve(request['source'])),
+                request.get('loaderVersion'))
+            request['fabricLoaderVersion'] = chosen['version']
+            job['loaderSelection'] = chosen
         if job.get('kind') == 'dependencies':
             require_mount('native dependency rebuild')
             env = dict(os.environ, PYTHONUNBUFFERED='1', MCFAO_STREAM_LOGS='1')
@@ -890,6 +923,9 @@ def run_job(path):
                     record = read_json(source / 'source.json')
                     if record.get('resourceSelection') != request.get('resourceSelection'):
                         raise ValueError('暂存内容的资源选择与任务不一致，请新建构建')
+                    staged_loader = (record.get('loaderSelection') or {}).get('version')
+                    if staged_loader and staged_loader != request.get('fabricLoaderVersion'):
+                        raise ValueError('暂存内容的 Fabric Loader 与任务不一致，请新建构建')
                     game = source / '.minecraft'
                     removed = clean_staged_metadata(game)
                     if removed: print(f'已清理 {len(removed)} 个 macOS 元数据项', flush=True)
@@ -897,7 +933,7 @@ def run_job(path):
                     expected = {name: digest for name, digest in record['filesSHA256'].items() if not is_metadata(name)}
                     if actual != expected: raise ValueError('暂存内容发生变化，请新建构建')
                     mods = game / 'mods'
-                else: mods, game = stage_source(resolve(request['source']), source, lambda s: print(s, flush=True), lambda: CANCELLED or (folder / 'cancel').exists(), force_compile=request.get('forceCompile', False), selection=request.get('resourceSelection'))
+                else: mods, game = stage_source(resolve(request['source']), source, lambda s: print(s, flush=True), lambda: CANCELLED or (folder / 'cancel').exists(), selection=request.get('resourceSelection'), loader_version=request.get('fabricLoaderVersion'))
                 update(compatibilityOverrides=read_json(source / 'source.json').get('compatibilityOverrides', []))
                 update(sourceFolder=str(source))
             execute([*command, 'doctor', '--renderer', 'gl41', '--config', resolve(request['config'])], folder, 'doctor', update, 'doctor', env)
@@ -1005,27 +1041,36 @@ def _start(request, retry=None):
                    build=str(resolve(request['output']) / ('build-' + ident[:12])), folder=str(folder), error='', retryOf=retry)
         if request['loader'] == 'fabric' and not request.get('existingBuild'):
             report = scan_pack(resolve(request['source']))
-            loader = read_json(workspace / 'compiler/fabric.lock.json')['fabricLoader']
-            job['compatibilityOverrides'] = source_overrides(report, loader, request.get('forceCompile', False))
-        if request.get('existingBuild'):
-            job['build'] = str(resolve(request['existingBuild']))
-            job['name'] = 'IPA 导出 · 26.1.2'
-        if retry:
-            old = read_json(job_path(workspace, retry))
-            if (old['state'] in ACTIVE or old['state'] == 'succeeded'
-                    or retry_request(old, workspace, request.get('quickBuild')) != request):
-                raise ValueError('此任务不能重试')
-            if request.get('quickBuild') and old['request'].get('quickBuild'):
-                job['build'] = old['build']
-            if old.get('sourceFolder'): job['sourceFolder'] = old['sourceFolder']
-        path = folder / 'job.json'
-        write_json(path, job)
-        with (folder / 'worker.log').open('ab') as log:
-            child = subprocess.Popen([sys.executable, '-B', str(Path(__file__).resolve()), 'run-job', '--job', str(path)], cwd=workspace, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
-        job['pid'] = child.pid
-        write_json(path, job)
-        (folder / 'launch').touch()
-        return job
+            chosen = choose_loader(workspace, report, request.get('loaderVersion'))
+            request['fabricLoaderVersion'] = chosen['version']
+            job['loaderSelection'] = chosen
+            job['compatibilityOverrides'] = source_overrides(report, chosen['version'])
+    if retry and request['loader'] == 'fabric':
+        # A retry must reuse the Loader the first attempt recorded, otherwise a
+        # changed pack declaration would silently switch the engine mid-job.
+        previous = read_json(job_path(workspace, retry))
+        previous_loader = (previous.get('loaderSelection') or {}).get('version')
+        if previous_loader and request.get('fabricLoaderVersion') != previous_loader:
+            raise ValueError('重试不能改变 Fabric Loader 版本')
+    if request.get('existingBuild'):
+        job['build'] = str(resolve(request['existingBuild']))
+        job['name'] = 'IPA 导出 · 26.1.2'
+    if retry:
+        old = read_json(job_path(workspace, retry))
+        if (old['state'] in ACTIVE or old['state'] == 'succeeded'
+                or retry_request(old, workspace, request.get('quickBuild')) != request):
+            raise ValueError('此任务不能重试')
+        if request.get('quickBuild') and old['request'].get('quickBuild'):
+            job['build'] = old['build']
+        if old.get('sourceFolder'): job['sourceFolder'] = old['sourceFolder']
+    path = folder / 'job.json'
+    write_json(path, job)
+    with (folder / 'worker.log').open('ab') as log:
+        child = subprocess.Popen([sys.executable, '-B', str(Path(__file__).resolve()), 'run-job', '--job', str(path)], cwd=workspace, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+    job['pid'] = child.pid
+    write_json(path, job)
+    (folder / 'launch').touch()
+    return job
 
 def start_dependencies(request):
     workspace = workspace_path(request['workspace'])

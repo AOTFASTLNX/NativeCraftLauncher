@@ -256,6 +256,59 @@ test("resource management is a real fifth step with per-session per-file choices
   ).toBe(true);
 });
 
+test("resource management offers a verified Fabric Loader choice", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 900, height: 1000 });
+  await page.goto("/");
+  await importReport(page, {
+    ...report,
+    fabric_loader_version: "0.19.2",
+  });
+  await page.getByRole("button", { name: "下一步", exact: true }).click();
+  const trigger = page.getByRole("button", {
+    name: "Fabric Loader",
+    exact: true,
+  });
+  await expect(trigger).toHaveText(/自动/);
+  await expect(
+    page.getByText(/来源声明 0\.19\.2；自动模式选不低于它的已验证版本/),
+  ).toBeVisible();
+  await trigger.click();
+  const options = page.getByRole("listbox", {
+    name: "Fabric Loader",
+    exact: true,
+  });
+  await expect(options.getByRole("option")).toHaveCount(3);
+  await options.getByRole("option", { name: "0.19.5", exact: true }).click();
+  await expect(trigger).toHaveText("0.19.5");
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByText(/手动指定；版本不受来源声明限制/)).toBeVisible();
+  const saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ncl.builder.v2") || "{}"),
+  );
+  expect(saved.loaderVersion).toBe("0.19.5");
+  await expect(page.locator(".select-popup")).toBeHidden();
+  const row = await page.evaluate(() => {
+    const label = document.querySelector(".resource-loader .resource-filter-label")!;
+    const menu = document.querySelector(".resource-loader .select-menu")!;
+    const container = document.querySelector(".resource-loader")!;
+    return {
+      label: label.getBoundingClientRect().toJSON(),
+      menu: menu.getBoundingClientRect().toJSON(),
+      container: container.getBoundingClientRect().toJSON(),
+    };
+  });
+  // Label stays on the left, the picker sits against the right edge.
+  expect(row.label.left - row.container.left).toBeLessThan(8);
+  expect(row.container.right - row.menu.right).toBeLessThan(8);
+  expect(row.menu.left).toBeGreaterThan(row.label.right + 40);
+  await page.screenshot({
+    path: "test-results/loader-choice.png",
+    fullPage: false,
+  });
+});
+
 test("new workbench prioritizes a guided IPA build and exposes browser limits", async ({
   page,
 }) => {
@@ -399,30 +452,28 @@ test("picking a pack checks it automatically and forgets it when the page is re-
   await expect(page.getByText("静态检查通过", { exact: true })).toBeVisible();
   expect(await inspected()).toHaveLength(2);
 });
-test("Loader mismatch can be forced and records the choice in review", async ({
+test("Loader mismatch advances automatically and records the choice in review", async ({
   page,
 }) => {
   await page.goto("/");
   await importReport(page, { ...report, fabric_loader_version: "0.19.2" });
   const next = page.getByRole("button", { name: "下一步", exact: true });
-  const force = page.getByRole("checkbox", { name: /强制编译/ });
   await expect(next).toBeEnabled();
-  await force.check();
-  await expect(next).toBeEnabled();
-  await force.uncheck();
-  await expect(next).toBeEnabled();
-  await force.check();
+  await expect(page.getByRole("checkbox", { name: /强制编译/ })).toHaveCount(0);
   await next.click();
   await expect(
     page.getByRole("heading", { name: "管理整合包资源" }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Fabric Loader", exact: true }),
+  ).toHaveText(/自动/);
   await next.click();
   await expect(
     page.getByRole("heading", { name: "准备你的构建环境" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "5 确认构建", exact: true }).click();
   await expect(
-    page.getByText("强制编译 · Fabric Loader 0.19.3", { exact: true }),
+    page.getByText("自动（向上取已验证版本）", { exact: true }),
   ).toBeVisible();
   await expect(
     page.getByText("此来源中的 Mod 已完成构建期代码审计"),
@@ -430,7 +481,6 @@ test("Loader mismatch can be forced and records the choice in review", async ({
   await expect(page.getByRole("checkbox", { name: /代码审计/ })).toHaveCount(0);
   await page.reload();
   await importReport(page, { ...report, fabric_loader_version: "0.19.2" });
-  await expect(force).not.toBeChecked();
   await expect(next).toBeEnabled();
 });
 test("custom app icon controls appear on the signing step", async ({ page }) => {
@@ -589,7 +639,6 @@ test("blocked source never enables advancing or building", async ({ page }) => {
     ],
   });
   await expect(page.getByText("需要处理", { exact: true })).toBeVisible();
-  await page.getByRole("checkbox", { name: /强制编译/ }).check();
   await expect(
     page.getByRole("button", { name: "下一步", exact: true }),
   ).toBeDisabled();
