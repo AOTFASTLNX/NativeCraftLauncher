@@ -77,6 +77,19 @@ static int smokeEnqueue(void *window, int kind, double a, double b, int c, int d
         [launcher presentViewController:editor animated:NO completion:^{
             [editor.view layoutIfNeeded];
             if (editor.ctrlView.subviews.count != legacy.controls.count) abort();
+            ControlButton *moved = (ControlButton *)editor.ctrlView.subviews.firstObject;
+            CGRect originalFrame = moved.frame;
+            CGRect movedFrame = CGRectOffset(originalFrame, 20, 10);
+            [editor.undoManager beginUndoGrouping];
+            [editor doMoveOrResizeButton:moved from:originalFrame to:movedFrame];
+            [editor.undoManager endUndoGrouping];
+            CGFloat movedX = moved.frame.origin.x;
+            if (fabs(movedX - originalFrame.origin.x) < 10 || !editor.undoManager.canUndo) abort();
+            [editor.undoManager undo];
+            if (fabs(moved.frame.origin.x - originalFrame.origin.x) > 1) abort();
+            [editor.undoManager redo];
+            if (fabs(moved.frame.origin.x - movedX) > 1) abort();
+            NSLog(@"CONTROL_EDITOR_MOVE_UNDO_REDO_PASS");
             NSUInteger initial = [editor.ctrlView.layoutDictionary[@"mControlDataList"] count];
             [editor performSelector:NSSelectorFromString(@"actionMenuAddButton")];
             [editor performSelector:NSSelectorFromString(@"actionMenuAddJoystick")];
