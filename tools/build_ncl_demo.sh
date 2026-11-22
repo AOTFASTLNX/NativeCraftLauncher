@@ -2,13 +2,19 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LABEL="${1:-NCL-demo-20261121}"
-OUT="${ROOT}/artifacts/ncl-demo-${LABEL}"
+if [[ "${1:-}" != "--test-version" || -z "${2:-}" || $# -ne 2 ]]; then
+  echo "Usage: $0 --test-version <label>" >&2
+  exit 2
+fi
+LABEL="$2"
+[[ "$LABEL" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid test version" >&2; exit 2; }
+OUT="${NCL_DEMO_OUTPUT_ROOT:-${ROOT}/artifacts}/ncl-demo-${LABEL}"
 DERIVED="${OUT}/DerivedData"
 PAYLOAD="${OUT}/Payload"
 
-rm -rf "$OUT"
-mkdir -p "$OUT" "$PAYLOAD"
+mkdir -p "$(dirname "$OUT")"
+mkdir "$OUT"
+mkdir -p "$PAYLOAD"
 
 /usr/bin/xcodebuild \
   -project "$ROOT/ios/NCLDemo/NCLDemo.xcodeproj" \
@@ -17,7 +23,7 @@ mkdir -p "$OUT" "$PAYLOAD"
   -sdk iphoneos \
   CONFIGURATION_BUILD_DIR="$DERIVED/Build/Products/Release-iphoneos" \
   FAOT_TEST_VERSION="$LABEL" \
-  PRODUCT_BUNDLE_IDENTIFIER=org.fabricaot.ncl.demo \
+  PRODUCT_BUNDLE_IDENTIFIER="${NCL_DEMO_BUNDLE_ID:-org.fabricaot.ncl.demo}" \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
   build

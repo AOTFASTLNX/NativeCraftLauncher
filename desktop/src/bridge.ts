@@ -69,8 +69,10 @@ export function detectPlatform(environment: Environment | null): string {
   return native ? "桌面模式" : "浏览器预览";
 }
 export function buildInstructions(settings: Settings, command: string): string {
+  const version = /--version '([^']+)'/.exec(command)?.[1] ?? "26.1.2";
+  const java = version === "1.21.1" ? 21 : 25;
   return (
-    "NCL Builder 构建准备\nMinecraft 26.1.2 / Java 25 / Fabric / iOS ARM64\n\n在 macOS Apple Silicon 的终端中，先进入项目目录：\n" +
+    `NCL Builder 构建准备\nMinecraft ${version} / Java ${java} / Fabric / iOS ARM64\n\n在 macOS Apple Silicon 的终端中，先进入项目目录：\n` +
     settings.workspace +
     "\n\n执行以下命令进行元数据准备：\n" +
     command +
@@ -96,7 +98,11 @@ export async function workbench<T>(
     workspace: form.workspace,
     python: form.python,
     action,
-    request: fields ? { workspace: form.workspace, fields } : form,
+    // A field-only action keeps its minimal shape; it still needs the selected
+    // line because setup-start otherwise reuses the 26.1.2 bootstrap record.
+    request: fields
+      ? { workspace: form.workspace, minecraftVersion: form.minecraftVersion, fields }
+      : form,
     id: id ?? null,
   });
 }

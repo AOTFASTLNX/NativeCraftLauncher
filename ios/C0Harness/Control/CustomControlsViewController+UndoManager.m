@@ -95,7 +95,8 @@
     button.properties[@"width"] = @(to.size.width);
     button.properties[@"height"] = @(to.size.height);
     [button update];
-    self.resizeView.frame = CGRectMake(CGRectGetMaxX(button.frame), CGRectGetMaxY(button.frame), self.resizeView.frame.size.width, self.resizeView.frame.size.height);
+    CGRect target = [self.ctrlView convertRect:button.frame toView:self.view];
+    self.resizeView.frame = CGRectMake(CGRectGetMaxX(target) - 22, CGRectGetMaxY(target) - 22, 44, 44);
 }
 
 - (void)doUpdateButton:(ControlButton *)button from:(NSMutableDictionary *)from to:(NSMutableDictionary *)to

@@ -23,6 +23,7 @@ from loader_selection import all_engine_libraries, default_version, engine_libra
 from run_b0_reference import execute, require_run, sandbox_policy
 from renderer_profile import DEFAULT_RENDERER, RENDERERS
 from artifact_copy import copy_artifact
+from game_versions import DEFAULT_VERSION, get_profile
 
 TOOL = ROOT / "interop/fabric/tool"
 FIXTURE = ROOT / "interop/fabric/fixture"
@@ -137,13 +138,21 @@ def root_mod_ids(roots):
     return ids
 
 
-def runtime_overlay_sources(roots):
+def runtime_overlay_sources(roots, version=DEFAULT_VERSION):
     """Split the run-time overlay sources into the ones this pack can compile and the rest."""
     present = root_mod_ids(roots)
     compiled, skipped = [], []
-    for path in sorted(p for p in content_paths(TOOL / "mcfao" / "aot") if p.suffix == ".java"):
+    get_profile(version)
+    selected={p.relative_to(TOOL):p for p in content_paths(TOOL / "mcfao" / "aot")
+              if p.suffix == ".java"}
+    version_root=TOOL / 'versions' / version
+    if version_root.is_dir():
+        selected.update({p.relative_to(version_root):p for p in content_paths(version_root)
+                         if p.suffix == '.java'})
+    for key in sorted(selected):
+        path=selected[key]
         relative = path.relative_to(TOOL).as_posix()
-        required = RUNTIME_OVERLAY_MODS.get(relative)
+        required = RUNTIME_OVERLAY_MODS.get(key.as_posix())
         if required and required not in present:
             skipped.append({"source": relative, "requiresMod": required})
             continue
@@ -197,7 +206,8 @@ def inspect_archives(roots, work, *, metadata_only=False):
     return inventory
 
 
-def transformation_checks(inventory, metadata, *, client_ids=None, nested=None, adapters=None):
+def transformation_checks(inventory, metadata, *, client_ids=None, nested=None, adapters=None,
+                          remapped=False, namespace="official"):
     if client_ids is None:
         client_ids = {mod["id"] for mod in metadata if mod["client"]}
     if nested is None:
@@ -298,7 +308,8 @@ def transformation_checks(inventory, metadata, *, client_ids=None, nested=None, 
                                     "entrypoint": name,
                                     "reason": "config is not required:true; Mixin skips it on failure "
                                               "exactly as in the JVM reference"})
-                if config.get("refmap") and needs_reference_remapping(archive, config["refmap"]):
+                if (namespace == "official" and not remapped and config.get("refmap")
+                        and needs_reference_remapping(archive, config["refmap"])):
                     # Fabric only installs a refmap remapper in development. In a production
                     # closure the mod's own bytecode is authoritative, so the refmap is retained
                     # but inert; a wrong namespace still fails loudly while Mixin is applied.
@@ -310,12 +321,12 @@ def transformation_checks(inventory, metadata, *, client_ids=None, nested=None, 
                 if name not in names:
                     unsupported(f"Missing Class Tweaker {name}")
                 header = archive.read(name).splitlines()[0].decode("utf-8").split()
-                if not header or header[-1] != "official":
-                    unsupported(f"Class Tweaker must use the official namespace: {name}")
+                if not header or header[-1] != namespace:
+                    unsupported(f"Class Tweaker must use the {namespace} namespace: {name}")
     return skipped
 
 
-def inspect_compatibility(inventory, metadata, root_paths):
+def inspect_compatibility(inventory, metadata, root_paths, *, namespace="official"):
     findings = []
     blocked_roots = set()
     skipped = []
@@ -332,7 +343,7 @@ def inspect_compatibility(inventory, metadata, root_paths):
             root_ids[mod["id"]].append(origin)
         try:
             skipped.extend(transformation_checks([item], [mod], client_ids=client_ids,
-                                                 nested=[not is_root], adapters=adapters))
+                                                 nested=[not is_root], adapters=adapters, namespace=namespace))
         except (ValueError, KeyError, IndexError, TypeError, OSError, zipfile.BadZipFile) as error:
             findings.append({"path": origin, "id": mod["id"], "reason": str(error)})
             blocked_roots.add(root)
@@ -550,11 +561,29 @@ def knot_classpath(engine, libraries, lock):
     return [*engine, *(p for p in libraries if p.name not in engine_names)]
 
 
+def remapping_classpath(engine, libraries, lock, client, intermediary):
+    # Keep the remapper's inputs identical to the selected Knot classpath.
+    # Including another pinned Loader here both mixes versions and requests
+    # reads outside the sandbox's explicitly allowed dependency set.
+    return [intermediary if path == client else path
+            for path in knot_classpath(engine, libraries, lock)]
+
+
 def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer=DEFAULT_RENDERER,
             loader=None):
     home, libraries, engine, report = load_reference(prepared, loader)
-    if client not in libraries or client.name != "26.1.2.jar":
+    profile = get_profile(report.get("minecraftVersion", DEFAULT_VERSION))
+    if client not in libraries or client.name != f"{profile.version}.jar" or client.parent.name != profile.version:
         raise ValueError("The input must be the verified owned client in the prepared manifest")
+    if profile.requires_remapping and renderer != "gl41":
+        raise ValueError("Minecraft 1.21.1 requires the GL41 renderer profile")
+    original_client = client
+    mapping_preparation = None
+    if profile.requires_remapping and audited:
+        from prepare_game_version import prepare_client
+        mapping_preparation = prepare_client(prepared, client, output / "game-version")
+        client = Path(mapping_preparation["client"])
+        libraries = [client if path == original_client else path for path in libraries]
     work = output / "work"
     for name in ("tmp", "home", "game/mods", "classes"):
         (work / name).mkdir(parents=True, exist_ok=True)
@@ -582,9 +611,9 @@ def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer
     tool_sources = [p for p in content_paths(TOOL) if p.suffix == ".java" and "aot" not in p.relative_to(TOOL).parts]
     compile_java(home, classpath, tool_sources, classes, output / "compile")
     classpath.insert(0, classes)
-    runtime_sources, overlay_skipped = runtime_overlay_sources(roots)
+    runtime_sources, overlay_skipped = runtime_overlay_sources(roots, profile.version)
     runtime_classes = None
-    if runtime_sources:
+    if runtime_sources and not mapping_preparation:
         runtime_classes = work / "runtime-classes"
         compile_java(home, [*classpath, client, *mod_files(work / "game/mods")],
                      runtime_sources, runtime_classes, output / "compile-runtime")
@@ -596,7 +625,17 @@ def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer
         driver, _ = loader_driver(prepared, report, loader)
     java = [str(home / "bin/java"), "-XX:+DisableAttachMechanism", "-XX:-UsePerfData",
             "-Xmx1g", "-Djava.awt.headless=true", f"-Duser.home={work / 'home'}",
-            f"-Djava.io.tmpdir={work / 'tmp'}"]
+            f"-Djava.io.tmpdir={work / 'tmp'}", f"-Dmcfao.minecraftVersion={profile.version}"]
+    if mapping_preparation:
+        mapping_path = work / "mappings.tiny"
+        copy_artifact(Path(mapping_preparation["mappings"]), mapping_path)
+        java += [f"-Dfabric.mappingPath={mapping_path}", "-Dfabric.runtimeMappingNamespace=official",
+                 "-Dfabric.defaultModDistributionNamespace=intermediary"]
+        remap_classpath = work / "remap-classpath.txt"
+        remap_classpath.write_text(os.pathsep.join(map(str, remapping_classpath(
+            engine, libraries, json.loads((ROOT / "compiler/fabric.lock.json").read_text()),
+            client, Path(mapping_preparation["intermediaryClient"])))))
+        java.append(f"-Dfabric.remapClasspathFile={remap_classpath}")
     agent_library = None
     if trace_agent:
         agent_library = home / "lib/libnative-image-agent.dylib"
@@ -605,7 +644,8 @@ def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer
     sandbox_prefix = []
     if audited:
         policy = output / "policy.sb"
-        policy.write_text(sandbox_policy(work, home, [driver, *classpath[1:]]))
+        remap_inputs = ([Path(mapping_preparation["intermediaryClient"])] if mapping_preparation else [])
+        policy.write_text(sandbox_policy(work, home, [driver, *classpath[1:], *remap_inputs]))
         sandbox_prefix = ["/usr/bin/sandbox-exec", "-f", str(policy)]
         outside = output / "outside-read.txt"
         outside.write_text("MCFAO first-party sandbox control\n")
@@ -628,6 +668,31 @@ def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer
                 connection.close()
                 raise RuntimeError("Sandbox allowed loopback network access")
     cp = ["-cp", os.pathsep.join(map(str, classpath)), MAIN]
+    remapping_record = None
+    if mapping_preparation:
+        remapped_mods = work / "remapped-mods"
+        remapping_report = work / "mod-remapping.json"
+        log = output / "remap-mods"
+        result = execute([*sandbox_prefix, *java, *cp, "remap-mods", str(remapping_report),
+                          str(client), str(work), str(work / "game/mods"), str(remapped_mods)],
+                         log, work, timeout=600, cpu_seconds=600, file_size_bytes=MAX_EXPORT)
+        if result["exitCode"] or result["timedOut"]:
+            raise RuntimeError(f"Fabric Mod namespace remapping failed. Logs: {log}")
+        remapping_record = json.loads(remapping_report.read_text())
+        (work / "game/mods").rename(work / "original-mods")
+        remapped_mods.rename(work / "game/mods")
+        for row in remapping_record["mods"]:
+            row["path"] = str(work / "game/mods" / Path(row["path"]).name)
+        roots = mod_files(work / "game/mods")
+        remapped_inventory = work / "remapped-inventory"
+        remapped_inventory.mkdir()
+        inventory = inspect_archives(roots, remapped_inventory)
+        # Recompile first-party runtime replacements against the remapped Mod APIs.
+        runtime_sources, overlay_skipped = runtime_overlay_sources(roots, profile.version)
+        if runtime_sources:
+            runtime_classes = work / "mapped-runtime-classes"
+            compile_java(home, [*classpath, client, *roots], runtime_sources, runtime_classes,
+                         output / "compile-mapped-runtime")
     parsed = work / "metadata.json"
     log = output / "parse"
     result = execute([*sandbox_prefix, *java, *cp, "inspect", str(parsed),
@@ -640,11 +705,18 @@ def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer
     lock = json.loads((ROOT / "compiler/fabric.lock.json").read_text())
     record = {"status": "FABRIC_METADATA_PARSED",
               "loader": loader or default_version(lock), "namespace": "official",
+              "minecraftVersion": profile.version,
               "modSHA256": hashes, "mods": metadata, "renderer": renderer,
               "runtimeOverlays": {"compiled": [p.relative_to(TOOL).as_posix() for p in runtime_sources],
                                   "skipped": overlay_skipped}}
+    if mapping_preparation:
+        record["gameVersionPreparation"] = {key: str(value) if isinstance(value, Path) else value
+                                             for key, value in mapping_preparation.items()}
+        record["originalClientSHA256"] = sha256(original_client)
+        record["modRemapping"] = remapping_record
     if not audited:
-        record["compatibility"] = inspect_compatibility(inventory, metadata, set(roots))
+        record["compatibility"] = inspect_compatibility(inventory, metadata, set(roots),
+                namespace="intermediary" if profile.requires_remapping else "official")
     resolution = work / "resolution.json"
     log = output / "resolve"
     solved = execute([*sandbox_prefix, *java, *cp, "resolve", str(resolution), str(client), str(work),
@@ -659,6 +731,7 @@ def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer
         raise ValueError(record["resolution"]["reason"])
     skipped = transformation_checks(
         inventory, metadata,
+        remapped=bool(mapping_preparation),
         nested=[path not in set(roots) for path, _, _, _ in inventory],
         adapters={adapter for (_, _, raw, _) in inventory
                   for adapter in (raw.get("languageAdapters") or {})})

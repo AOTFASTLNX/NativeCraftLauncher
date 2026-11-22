@@ -10,6 +10,7 @@
 @interface FAOTControlEditorViewController ()
 @property (nonatomic, copy) NSString *layoutName;
 @property (nonatomic, copy) void (^completion)(FAOTControlLayout *, BOOL);
+@property (nonatomic) BOOL didSaveLayout;
 @end
 
 @implementation FAOTControlEditorViewController
@@ -36,13 +37,17 @@
     self.setDefaultCtrl = ^(NSString *name) {
         FAOTControlSetActiveLayoutName(name);
         weakSelf.layoutName = name;
+        weakSelf.didSaveLayout = YES;
     };
     [super viewDidLoad];
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
     [super viewDidDisappear:animated];
-    if (self.completion) self.completion(nil, YES);
+    if (self.isBeingDismissed && self.completion) {
+        self.completion(nil, self.didSaveLayout);
+        self.completion = nil;
+    }
 }
 
 @end

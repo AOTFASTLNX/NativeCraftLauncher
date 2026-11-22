@@ -1,6 +1,7 @@
 #include "glfw_lite.h"
 #include "osmesa_gl.h"
 #include <math.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,7 @@ struct GLFWwindow {
     GLFWwindowposfun pos; GLFWwindowsizefun size; GLFWframebuffersizefun framebuffer;
     GLFWwindowclosefun closed; GLFWwindowfocusfun focused; GLFWwindowiconifyfun iconified;
     GLFWcursorenterfun entered; GLFWkeyfun key; GLFWcharfun character;
+    GLFWcharmodsfun characterMods;
     GLFWmousebuttonfun button; GLFWcursorposfun cursor; GLFWscrollfun scroll;
     GLFWdropfun drop; GLFWimestatusfun imeStatus; GLFWpreeditfun preedit;
     unsigned char keys[349];
@@ -29,6 +31,7 @@ struct GLFWwindow {
 };
 typedef struct { GLFWwindow *window; int kind; double a, b; int c, d; } Event;
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t eventAvailable = PTHREAD_COND_INITIALIZER;
 static Event events[1024];
 static unsigned int readIndex, writeIndex;
 static GLFWwindow *live;
@@ -166,6 +169,7 @@ int faot_glfw_enqueue(GLFWwindow *w,int kind,double a,double b,int c,int d) {
     pthread_mutex_lock(&mutex);
     if (w && w==live && writeIndex-readIndex < 1024) {
         events[writeIndex++ % 1024]=(Event){w,kind,a,b,c,d}; accepted=1;
+        pthread_cond_signal(&eventAvailable);
     }
     pthread_mutex_unlock(&mutex);
     if (!accepted) fprintf(stderr,"[GLFW-lite] event rejected: stale window or full queue\n");
@@ -218,7 +222,10 @@ void glfwPollEvents(void) {
             if((int)e.a>=0&&(int)e.a<8)w->mouseButtons[(int)e.a]=(e.b!=0);
             if(w->button)w->button(w,(int)e.a,(int)e.b,e.c); break;
         case FAOT_EVENT_SCROLL: if(w->scroll)w->scroll(w,e.a,e.b); break;
-        case FAOT_EVENT_CHAR: if(w->character)w->character(w,(unsigned int)e.a); break;
+        case FAOT_EVENT_CHAR:
+            if(w->characterMods)w->characterMods(w,(unsigned int)e.a,e.c);
+            if(w==live && w->character)w->character(w,(unsigned int)e.a);
+            break;
         case FAOT_EVENT_KEY:
             if ((int)e.a>=0 && (int)e.a<349)w->keys[(int)e.a]=(e.c!=0);
             if(w->key)w->key(w,(int)e.a,(int)e.b,e.c,e.d); break;
@@ -226,6 +233,39 @@ void glfwPollEvents(void) {
         default: fail(GLFW_INVALID_VALUE,"unknown event kind"); break;
         }
     }
+}
+void glfwWaitEventsTimeout(double timeout) {
+    if (!ready()) return;
+    if (!(timeout > 0.0) || !isfinite(timeout)) {
+        fail(GLFW_INVALID_VALUE, "event wait timeout must be positive and finite"); return;
+    }
+    double start=monotonic();
+    int status=0;
+    pthread_mutex_lock(&mutex);
+    while(readIndex==writeIndex) {
+        double remaining=timeout-(monotonic()-start);
+        if(remaining<=0.0)break;
+        /* Bound each interval to avoid overflowing time_t for a valid huge timeout.
+         * Apple relative waits avoid wall-clock changes; the host fallback uses
+         * an absolute deadline and rechecks the monotonic elapsed time. */
+        double interval=fmin(remaining,3600.0);
+        struct timespec deadline;
+#if defined(__APPLE__)
+        deadline.tv_sec=(time_t)interval;
+        deadline.tv_nsec=(long)((interval-deadline.tv_sec)*1000000000.0);
+        status=pthread_cond_timedwait_relative_np(&eventAvailable,&mutex,&deadline);
+#else
+        clock_gettime(CLOCK_REALTIME,&deadline);
+        long nanos=deadline.tv_nsec+(long)((interval-floor(interval))*1000000000.0);
+        deadline.tv_sec+=(time_t)interval+nanos/1000000000L;
+        deadline.tv_nsec=nanos%1000000000L;
+        status=pthread_cond_timedwait(&eventAvailable,&mutex,&deadline);
+#endif
+        if(status && status!=ETIMEDOUT)break;
+    }
+    pthread_mutex_unlock(&mutex);
+    if(status && status!=ETIMEDOUT){fail(GLFW_PLATFORM_ERROR,"event wait failed");return;}
+    glfwPollEvents();
 }
 void glfwGetWindowSize(GLFWwindow *w,int *a,int *b) { if(valid(w)){double scale=gl41_scale_value();pthread_mutex_lock(&mutex);if(a)*a=(int)(w->width*scale+0.5);if(b)*b=(int)(w->height*scale+0.5);pthread_mutex_unlock(&mutex);} }
 void glfwGetFramebufferSize(GLFWwindow *w,int *a,int *b) { if(valid(w)){double scale=gl41_scale_value();pthread_mutex_lock(&mutex);if(a)*a=(int)(w->pixelWidth*scale+0.5);if(b)*b=(int)(w->pixelHeight*scale+0.5);pthread_mutex_unlock(&mutex);} }
@@ -317,6 +357,7 @@ SET_CALLBACK(WindowIconify,GLFWwindowiconifyfun,iconified)
 SET_CALLBACK(CursorEnter,GLFWcursorenterfun,entered)
 SET_CALLBACK(Key,GLFWkeyfun,key)
 SET_CALLBACK(Char,GLFWcharfun,character)
+SET_CALLBACK(CharMods,GLFWcharmodsfun,characterMods)
 SET_CALLBACK(MouseButton,GLFWmousebuttonfun,button)
 SET_CALLBACK(CursorPos,GLFWcursorposfun,cursor)
 SET_CALLBACK(Scroll,GLFWscrollfun,scroll)

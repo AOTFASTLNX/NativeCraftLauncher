@@ -10,6 +10,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -17,10 +18,12 @@ from bootstrap_toolchain import sha256
 from capture import ROOT, capture
 from run_b0_reference import execute, require_run, sandbox_policy
 from client_graph_diagnostics import audit_metadata, parse_time_rss, read_analysis_statistics, summarize_gc_logs
-from graphics_common import bridge_overlays
+from graphics_common import bridge_overlays, validate_bridge_libraries
+from prepare_logging_aot import prepare_logging_aot
+from prepare_opengl_aot import prepare_opengl_aot
 from lwjgl_codegen import CALLBACKS
 from config_reflection import reflection_from_jar
-from aot_compatibility import (RENDER_PIPELINES, add_bytecode_results, attribute_failure, cached_bytecode_report, issue,
+from aot_compatibility import (add_bytecode_results, attribute_failure, cached_bytecode_report, issue,
                                publish, transform_report)
 from mod_file_policy import content_paths, copy_content_file, copy_ignore, is_metadata
 from native_image_home import native_image_home
@@ -28,6 +31,7 @@ from mdaf import (build_native_image_config, merge_agent_metadata,
                   validate_reflection_entries)
 from verify_aot_classpath import verify_entries
 from renderer_profile import DEFAULT_RENDERER, RENDERERS
+from game_versions import DEFAULT_VERSION, get_profile
 
 NATIVE_FAILURE = re.compile(
     r"OutOfMemoryError|ran out of memory|NativeImage\$NativeImageError|"
@@ -277,6 +281,9 @@ def run(argv, resources):
         parser.error("Confirmed B1 device behavior required")
     prepared = args.prepared.resolve(strict=True)
     manifest = json.loads((prepared / "result.json").read_text())
+    profile = get_profile(manifest.get("minecraftVersion", DEFAULT_VERSION))
+    if profile.requires_remapping and args.renderer == "metal":
+        parser.error("Minecraft 1.21.1 requires the GL41 renderer profile")
     # Sandbox rules must name the real toolchain after external-storage relocation.
     home = Path(manifest["javaHome"]).resolve(strict=True)
     if sha256(home / "bin/java") != manifest["javaSHA256"]:
@@ -292,10 +299,11 @@ def run(argv, resources):
         libraries.append(path)
     client_jar_override = None
     if args.graphics_bridge:
-        try: overlays=bridge_overlays(args.graphics_bridge)
+        try:
+            replaced = set(validate_bridge_libraries(args.graphics_bridge, manifest["referenceLibraries"], profile.version))
+            overlays=bridge_overlays(args.graphics_bridge)
         except (OSError,ValueError,KeyError) as error:parser.error(str(error))
-        replaced={p.name.replace("-ios.jar","-3.4.1.jar") for p in overlays}
-        libraries=[*overlays,*(p for p in libraries if p.name not in replaced)]
+        libraries=[*overlays,*(p for p in libraries if p not in replaced)]
     if args.metal_bootstrap:
         metal=args.metal_bootstrap.resolve(strict=True)
         report=json.loads((metal/"result.json").read_text())
@@ -312,13 +320,14 @@ def run(argv, resources):
         if args.fabric_report:
             fabric_record = json.loads(args.fabric_report.read_text())
             if (fabric_record.get("status") != "FABRIC_AOT_INPUT_PREPARED"
-                    or fabric_record.get("renderer") != args.renderer):
+                    or fabric_record.get("renderer") != args.renderer
+                    or fabric_record.get("minecraftVersion", DEFAULT_VERSION) != profile.version):
                 parser.error("Fabric export and selected renderer differ or the export was incomplete")
             verify_fabric_source(candidate, split_input, fabric_record)
         replaced = 0
         for index, path in enumerate(libraries):
             # The client jar is the only library that lives in versions/<version>/.
-            if path.name.startswith("26.1.2") and path.suffix == ".jar" and path.parent.name == "26.1.2":
+            if path.name == f"{profile.version}.jar" and path.parent.name == profile.version:
                 libraries[index] = candidate
                 replaced += 1
         if replaced != 1:
@@ -342,18 +351,33 @@ def run(argv, resources):
     output = output.resolve(strict=True)
     sources=output/"source"
     for name in ["probe_client_graph.py","client_graph_diagnostics.py","run_b0_reference.py",
-                 "config_reflection.py", "aot_compatibility.py", "mdaf.py", "mod_file_policy.py", "verify_aot_classpath.py"]:
+                 "config_reflection.py", "aot_compatibility.py", "mdaf.py", "mod_file_policy.py",
+                 "verify_aot_classpath.py", "game_versions.py", "graphics_common.py", "prepare_logging_aot.py",
+                 "prepare_opengl_aot.py"]:
         sources.mkdir(exist_ok=True)
         shutil.copy2(ROOT/"tools"/name,sources/name)
     work = output / "work"
     for name in ["tmp", "home", "caps"]:
         (work / name).mkdir(parents=True, exist_ok=True)
+    logging_adaptation = {"status": "NOT_REQUIRED"}
+    opengl_adaptation = {"status": "NOT_REQUIRED"}
+    if profile.requires_remapping:
+        for row in manifest["engineLibraries"]:
+            if sha256(Path(row["path"])) != row["sha256"]:
+                raise ValueError("Logging transform engine changed: " + row["path"])
+        libraries, logging_adaptation = prepare_logging_aot(
+            libraries, work / "logging-aot", home,
+            [Path(row["path"]) for row in manifest["engineLibraries"]])
+        if args.graphics_bridge and args.renderer == "gl41":
+            libraries, opengl_adaptation = prepare_opengl_aot(
+                libraries, work / "opengl-aot", home,
+                [Path(row["path"]) for row in manifest["engineLibraries"]])
     entry_class="net.minecraft.client.main.Main"
     if args.window_probe or args.openal_probe:
         probe_name='OpenALProbe' if args.openal_probe else 'WindowProbe'
         classes=work/"classes";classes.mkdir()
         compiled=capture([str(home/"bin/javac"),"-proc:none","-cp",":".join(map(str,libraries)),"-d",str(classes),
-                          str(ROOT/('interop/graphics/'+probe_name+'.java'))],output/"window-probe-compile",180)
+                          str(ROOT/'interop/graphics'/('1211' if args.window_probe and profile.requires_remapping else '')/(probe_name+'.java'))],output/"window-probe-compile",180)
         if compiled["exitCode"]:parser.error("Window probe compilation failed; see window-probe-compile/stderr.log")
         jar=work/"window-probe.jar"
         with zipfile.ZipFile(jar,"w",compression=zipfile.ZIP_DEFLATED) as archive:
@@ -433,7 +457,9 @@ def run(argv, resources):
     result = {"status":"BLOCKED", "gateC0":"BLOCKED", "mode":"client-graph-diagnostic",
               "scope":"real net.minecraft.client.main.Main reachability only; no game execution, auth arguments or rendering",
               "classpathSHA256":{str(p):sha256(p) for p in libraries if p.is_file()},
-              "renderer":args.renderer,
+              "renderer":args.renderer, "minecraftVersion":profile.version,
+              "loggingAdaptation":logging_adaptation,
+              "openglAdaptation":opengl_adaptation,
               "gateC1":"NOT RUN", "gateC2":"NOT RUN", "heapGiB":args.heap_gib,
               "targetCodeGeneration":"NOT RUN", "targetExecution":"NOT RUN",
               "fullClientFabricTransformation":"NOT RUN",
@@ -459,7 +485,7 @@ def run(argv, resources):
     if args.graphics_bridge:
         result["graphicsBridge"]=str(args.graphics_bridge.resolve())
         result["entryClass"]=entry_class
-        if args.window_probe:result["scope"]="real 26.1.2 Window constructor only; no Minecraft main, renderer or gameplay"
+        if args.window_probe:result["scope"]=f"real {profile.version} Window constructor only; no Minecraft main, renderer or gameplay"
         if args.openal_probe:result['scope']='real audio context/PCM playback progression, muted fixture; no audible or game audio acceptance'
         if args.metal_probe:result["scope"]="real Window/RenderSystem plus diagnostic Metal clear; game pipelines unavailable"
         if args.metal_resource_probe:result["scope"]="real Window/RenderSystem plus GPU resource roundtrip and first-party presentation; game draw pipelines unavailable"
@@ -499,13 +525,17 @@ def run(argv, resources):
         # rather than referenced from compiler/ where it is maintained.
         reflection_entries = json.loads((ROOT / "compiler/reflection-config.json").read_text())
         findings, graph, static_metadata = [], {}, {}
+        if logging_adaptation["status"] != "NOT_REQUIRED":
+            static_metadata["resource-config.json"] = {"resources": {"includes": [
+                {"pattern": r"META-INF/org/apache/logging/log4j/core/config/plugins/Log4j2Plugins\.dat"}
+            ]}}
         compatibility = None
         if args.renderer and args.client_jar:
             prepared_fabric = json.loads(args.fabric_report.read_text()) if args.fabric_report else {
                 "renderer": args.renderer,
             }
             compatibility = transform_report(prepared_fabric)
-            required = {entry_class.replace(".", "/"), RENDER_PIPELINES}
+            required = {entry_class.replace(".", "/"), *profile.render_roots}
             if args.renderer == "metal":
                 required.add("fabricaot/metal/MetalBackend")
             fabric_entries = prepared_fabric.get("transform", {}).get("entrypoints", ())
@@ -527,7 +557,8 @@ def run(argv, resources):
                 if caller in owners:
                     finding["mod"] = owners[caller]
             if resources_config["resources"]["includes"]:
-                static_metadata["resource-config.json"] = resources_config
+                static_metadata.setdefault("resource-config.json", {"resources": {"includes": []}})[
+                    "resources"]["includes"].extend(resources_config["resources"]["includes"])
             if any(row["severity"] == "blocker" for row in findings):
                 compatibility = add_bytecode_results(compatibility, findings, graph, static_metadata)
                 publish(output / "bytecode-findings.json", {"findings": findings, "graph": graph})

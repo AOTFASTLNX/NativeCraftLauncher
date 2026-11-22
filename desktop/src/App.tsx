@@ -44,9 +44,11 @@ import {
 } from "lucide-react";
 import {
   DEFAULT_SETTINGS,
+  GAME_VERSIONS,
   STORAGE_KEY,
   parseReport,
   parseSavedState,
+  type MinecraftVersion,
   type Report,
 } from "./model";
 import {
@@ -66,11 +68,13 @@ import {
   configurationFields,
   defaultForm,
   explainError,
+  formVersion,
   isActive,
   mergeJob,
   restoreForm,
   stageName,
   stages,
+  versionFacts,
   type AotCompatibility,
   type Bootstrap,
   type BuildForm,
@@ -865,6 +869,10 @@ export default function App() {
       ? `${busy}，请等待完成。`
       : blockedReason;
   const currentReport = report?.source === form.source ? report : null;
+  // The pack's declaration wins for any imported source; the form value only
+  // matters for a vanilla build or before a source is checked.
+  const buildVersion = formVersion(form, currentReport);
+  const versionInfo = versionFacts(buildVersion);
   const headingRetention = resourceRetention(
     currentReport,
     form.resourceSelection,
@@ -1237,6 +1245,9 @@ export default function App() {
     setReport(r);
     setForm((f) => ({
       ...f,
+      // Switching to a pack of another line switches the build line with it;
+      // the version is never inherited from whatever was selected before.
+      minecraftVersion: r.target_minecraft,
       resourceSelection:
         r.resources && r.resources_fingerprint
           ? f.resourceSelection?.source === r.source &&
@@ -1404,6 +1415,15 @@ export default function App() {
     setUserScrolled(false);
   }, [job?.id]);
   useEffect(() => {
+    // A source switch resets the line to the new pack's declaration, so a
+    // stale selection from the previous pack can never leak into a job.
+    setForm((f) =>
+      currentReport && f.minecraftVersion !== currentReport.target_minecraft
+        ? { ...f, minecraftVersion: currentReport.target_minecraft }
+        : f,
+    );
+  }, [currentReport?.source, currentReport?.target_minecraft]);
+  useEffect(() => {
     if (!reset) return;
     const d = dialog.current!;
     const previous = document.activeElement;
@@ -1502,7 +1522,13 @@ export default function App() {
       formRef.current, "setup-start", undefined, { owned: true },
     ));
   }
-  async function buildConfigured(request: BuildForm) {
+  async function buildConfigured(input: BuildForm) {
+    // Pin the line the user actually reviewed; the workbench re-derives it
+    // from the source report and rejects a mismatch.
+    const request: BuildForm = {
+      ...input,
+      minecraftVersion: formVersion(input, report),
+    };
     await attempt("正在创建构建任务", async () => {
       const result = await workbench<DependencyInventory>(request, "dependencies");
       setDependencies(result);
@@ -1587,6 +1613,9 @@ export default function App() {
       setForm((f) => ({
         ...f,
         source: "",
+        // The builder starts each visit at the default line; a pack then sets
+        // its own version when it is checked.
+        minecraftVersion: defaultForm.minecraftVersion,
         resourceSelection: null,
       }));
     }
@@ -1764,10 +1793,12 @@ export default function App() {
           <div className="platform-mark">
             <Smartphone size={23} />
             <span>
-              为 iPhone 构建<small>Minecraft Java 26.1.2</small>
+              为 iPhone 构建<small>Minecraft Java {versionInfo.version}</small>
             </span>
           </div>
-          <p>Java 25 · Fabric · iOS ARM64</p>
+          <p>
+            Java {versionInfo.java} · Fabric · iOS ARM64
+          </p>
           <div className="local-state">
             <span className={"dot " + (native ? "live" : "")} />
             {native ? "本机桌面工作台" : "浏览器预览"}
@@ -2020,7 +2051,7 @@ export default function App() {
                               onClick={() => update({ loader: "vanilla" })}
                             >
                               <Box size={17} />
-                              原版 26.1.2
+                              原版 {form.minecraftVersion}
                             </button>
                           </div>
                           {form.loader === "fabric" ? (
@@ -2086,7 +2117,7 @@ export default function App() {
                                 <span className="source-caption">
                                   {busy === "正在检查游戏内容"
                                     ? "正在自动检查来源…"
-                                    : "选择后自动检查来源 · Minecraft 26.1.2 · Fabric Loader 0.19.3"}
+                                    : "选择后自动检查来源 · Minecraft 26.1.2 / 1.21.1 · Fabric Loader 0.19.3"}
                                 </span>
                                 <p className="import-note">
                                   .mrpack
@@ -2151,7 +2182,11 @@ export default function App() {
                                     </span>
                                   </div>
                                   <p className="mod-list-hint">
-                                    来源 Loader{" "}
+                                    Minecraft{" "}
+                                    <strong>{currentReport.target_minecraft}</strong>
+                                    {" · "}Java{" "}
+                                    {versionFacts(currentReport.target_minecraft).java}
+                                    {" · "}来源 Loader{" "}
                                     {currentReport.fabric_loader_version ||
                                       "未声明"}
                                     。构建会自动向上选择已验证版本，可在资源管理页指定。
@@ -2248,12 +2283,31 @@ export default function App() {
                           ) : (
                             <div className="vanilla-card">
                               <Box size={44} strokeWidth={1.25} />
-                              <h3>Minecraft Java 26.1.2</h3>
+                              <h3>Minecraft Java {buildVersion}</h3>
                               <p>
                                 使用构建配置中已校验的本地正版客户端和资源，无需导入额外
                                 Mod。
                               </p>
-                              <Pill tone="green">原版构建路径</Pill>
+                              <Pill tone="green">
+                                原版构建路径 · Java {versionInfo.java}
+                              </Pill>
+                              <label className="vanilla-version">
+                                <span>构建版本</span>
+                                <SelectMenu
+                                  label="原版构建版本"
+                                  value={buildVersion}
+                                  onChange={(value) =>
+                                    update({
+                                      minecraftVersion:
+                                        value as MinecraftVersion,
+                                    })
+                                  }
+                                  options={GAME_VERSIONS.map((row) => ({
+                                    value: row.version,
+                                    label: row.label,
+                                  }))}
+                                />
+                              </label>
                             </div>
                           )}
                         </>
@@ -2511,7 +2565,18 @@ export default function App() {
                                     (currentReport?.pack_name ||
                                       basename(form.source) ||
                                       "尚未选择")
-                                  : "原版 Minecraft 26.1.2",
+                                  : "原版 Minecraft " + buildVersion,
+                              ],
+                              [
+                                "Minecraft 版本",
+                                buildVersion +
+                                  (currentReport?.minecraft_version &&
+                                  currentReport.minecraft_version !==
+                                    buildVersion
+                                    ? "（来源声明 " +
+                                      currentReport.minecraft_version +
+                                      "）"
+                                    : ""),
                               ],
                               ...(form.loader === "fabric"
                                 ? [
@@ -2528,7 +2593,7 @@ export default function App() {
                                     ],
                                   ]
                                 : []),
-                              ["构建目标", "iOS ARM64 · Java 25 AOT"],
+                              ["构建目标", versionInfo.target],
                               [
                                 "测试版本",
                                 form.testVersion?.trim() || "未设置",

@@ -62,12 +62,25 @@ public final class LwjglProbe {
         GLFWFramebufferSizeCallback previous=glfwSetFramebufferSizeCallback(window,null);
         if(previous.address()!=resized.address())throw new AssertionError("callback address identity");
         previous.free();
+        GLFWCharModsCallback charMods=GLFWCharModsCallback.create((w,code,mods)->{});
+        glfwSetCharModsCallback(window,charMods);
+        if(glfwSetCharModsCallback(window,null).address()!=charMods.address())
+            throw new AssertionError("char modifiers callback identity");
+        charMods.free();
+        double waitStarted=glfwGetTime();glfwWaitEventsTimeout(0.01);
+        if(glfwGetTime()-waitStarted<0.005)throw new AssertionError("event wait returned without timeout or event");
         GLFWErrorCallback[] slots=new GLFWErrorCallback[31];
         for(int i=0;i<slots.length;i++)slots[i]=GLFWErrorCallback.create((a,c)->{});
         boolean rejected=false;
         try{GLFWErrorCallback.create((a,c)->{});}catch(IllegalStateException expected){rejected=true;}
         if(!rejected)throw new AssertionError("static callback capacity was not enforced");
         for(GLFWErrorCallback callback:slots)callback.free();
+        if(Callback.getSafe(0)!=null)throw new AssertionError("null callback lookup");
+        rejected=false;
+        try(GLFWWindowMaximizeCallback unsupported=GLFWWindowMaximizeCallback.create((w,maximized)->{})){
+            throw new AssertionError("unregistered callback ABI accepted");
+        }catch(UnsupportedOperationException expected){rejected=true;}
+        if(!rejected)throw new AssertionError("callback ABI must be registered explicitly");
         rejected=false;
         try{glfwWaitEvents();}catch(UnsupportedOperationException expected){rejected=true;}
         if(!rejected)throw new AssertionError("unsupported API must fail explicitly");

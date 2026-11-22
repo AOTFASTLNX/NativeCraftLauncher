@@ -20,7 +20,7 @@ public final class TextureImage {
         this.components = components;
         pixels = new int[width * height];
         for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) pixels[y * width + x] = image.getPixel(x, y);
+            for (int x = 0; x < width; x++) pixels[y * width + x] = TexturePixels.argb(image, x, y);
         }
     }
 

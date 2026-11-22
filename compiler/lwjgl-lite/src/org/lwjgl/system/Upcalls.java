@@ -25,6 +25,7 @@ final class Upcalls {
         else if(instance instanceof GLFWIMEStatusCallbackI)kind=15;
         else if(instance instanceof GLFWPreeditCallbackI)kind=16;
         else if(instance instanceof STBIWriteCallbackI)kind=17;
+        else if(instance instanceof GLFWCharModsCallbackI)kind=18;
         else throw new UnsupportedOperationException("Unregistered iOS static callback ABI: "+instance.getClass().getName());
         return IOSNative.callbackCreate(instance,kind);
     }

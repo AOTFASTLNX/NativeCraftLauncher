@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import plistlib
 import re
 import shutil
 import subprocess
@@ -26,12 +27,75 @@ import sys
 from pathlib import Path
 from mod_file_policy import is_metadata
 from artifact_copy import copy_artifact
+from game_versions import DEFAULT_VERSION, get_profile
+from test_version import test_version, ipa_filename
 
 ROOT = Path(__file__).resolve().parent.parent
 PROJECT = ROOT / "ios/C0Harness/C0Harness.xcodeproj"
 SCHEME = "C0Harness"
 BUNDLE_ID = "org.fabricaot.research.c0.kexin"
 DEFAULT_DYLIB = ROOT / "artifacts/c0/client-link-02/client-graph.dylib"
+# The default 26.1.2 client ships asset index 30; another line must name its own
+# index instead of silently inheriting this one.
+DEFAULT_ASSET_INDEX = "30"
+
+
+def resolve_asset_index(value, minecraft_version: str) -> str:
+    """Validate the packaged asset index; only the default line may omit it."""
+    if value is None:
+        if minecraft_version == DEFAULT_VERSION:
+            return DEFAULT_ASSET_INDEX
+        raise ValueError("Minecraft " + minecraft_version +
+                         " needs an explicit --asset-index")
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]+", value):
+        raise ValueError("Invalid asset index ID: " + repr(value))
+    return value
+
+
+def package_profile(minecraft_version: str = DEFAULT_VERSION, asset_index=None,
+                    test_version_label: str = "") -> dict:
+    """The version/asset/test facts the harness Info.plist must end up carrying."""
+    get_profile(minecraft_version)
+    return {"minecraftVersion": minecraft_version,
+            "assetIndex": resolve_asset_index(asset_index, minecraft_version),
+            "testVersion": test_version(test_version_label)}
+
+
+def package_settings(profile: dict) -> list[str]:
+    """xcodebuild settings that expand the harness Info.plist placeholders."""
+    return [f"FAOT_MINECRAFT_VERSION={profile['minecraftVersion']}",
+            f"FAOT_ASSET_INDEX={profile['assetIndex']}",
+            f"FAOT_TEST_VERSION={profile['testVersion']}"]
+
+
+def validate_package_profile(app: Path, profile: dict) -> dict:
+    """Read the real Info.plist back; an unexpanded placeholder is a failure."""
+    info_path = Path(app) / "Info.plist"
+    if not info_path.is_file():
+        raise ValueError("Packaged app has no Info.plist: " + str(info_path))
+    info = plistlib.loads(info_path.read_bytes())
+    actual = {"minecraftVersion": info.get("FAOTMinecraftVersion"),
+              "assetIndex": info.get("FAOTAssetIndex"),
+              "testVersion": test_version(info.get("FAOTTestVersion", ""))}
+    expected = {"minecraftVersion": profile["minecraftVersion"],
+                "assetIndex": profile["assetIndex"],
+                "testVersion": test_version(profile.get("testVersion", ""))}
+    if actual != expected:
+        raise ValueError("Packaged Minecraft version, asset index or test version differs "
+                         f"from the build inputs: {actual} != {expected}")
+    return actual
+
+
+def archived_app(archive_path: Path) -> Path:
+    """The single app inside an xcarchive; a symlinked or ambiguous app is refused."""
+    archive_path = Path(archive_path)
+    apps = [p for p in (archive_path / "Products/Applications").glob("*.app")
+            if p.is_dir() and not is_metadata(p.name)]
+    if len(apps) != 1:
+        raise ValueError("Expected one archived app: " + str(archive_path))
+    if apps[0].is_symlink():
+        raise ValueError("Archived app must not be a symlink: " + str(apps[0]))
+    return apps[0]
 
 def validate_shader_bundle(directory: Path,simulator: bool)->dict:
     if directory.is_symlink():raise ValueError("Shader bundle must not be a symlink")
@@ -99,20 +163,31 @@ def validate_dylib(dylib: Path, simulator: bool = False) -> dict:
     return facts
 
 
-def archive(dylib: Path, configuration: str, timeout: int, native_dir: Path | None = None) -> dict:
+def archive(dylib: Path, configuration: str, timeout: int, native_dir: Path | None = None,
+            profile: dict | None = None) -> dict:
+    profile = profile or package_profile()
     path = HARNESS_DIR / "C0Harness.xcarchive"
     if path.exists():raise RuntimeError("Archive output exists; choose a new --output directory")
     outcome = run(["/usr/bin/xcodebuild", "-project", str(PROJECT), "-scheme", SCHEME,
                    "-configuration", configuration, "-destination", "generic/platform=iOS",
                    "-archivePath", str(path), f"FAOT_CLIENT_LIBRARY={dylib}",
                    f"FAOT_GRAPHICS_NATIVE_DIR={native_dir or ''}",
+                   *package_settings(profile),
                    "-allowProvisioningUpdates", "archive"], timeout=timeout)
     outcome["archivePath"] = str(path)
     outcome["succeeded"] = outcome["exitCode"] == 0 and (path / "Info.plist").exists()
+    if outcome["succeeded"]:
+        # The archived app is what gets exported; check its real plist now.
+        try:
+            outcome["profile"] = validate_package_profile(archived_app(path), profile)
+        except (OSError, ValueError) as exc:
+            outcome["succeeded"] = False
+            outcome["profileError"] = str(exc)
     return outcome
 
 
-def export_archive(timeout: int) -> dict:
+def export_archive(timeout: int, profile: dict | None = None) -> dict:
+    profile = profile or package_profile()
     out = HARNESS_DIR / "export"
     if out.exists():raise RuntimeError("Export output exists; choose a new --output directory")
     outcome = run(["/usr/bin/xcodebuild", "-exportArchive",
@@ -123,9 +198,50 @@ def export_archive(timeout: int) -> dict:
     outcome.update({"exportPath": str(out), "succeeded": outcome["exitCode"] == 0 and bool(ipas),
                     "ipa": str(ipas[0]) if ipas else None})
     if ipas:
-        outcome["ipaBytes"] = ipas[0].stat().st_size
-        outcome["ipaSHA256"] = sha256(ipas[0])
+        ipa = ipas[0]
+        # Name the deliverable after its test stage, like the device build does.
+        label = test_version(profile.get("testVersion", ""))
+        if label:
+            named = ipa.with_name(ipa_filename(label))
+            if named != ipa:
+                if named.exists():raise RuntimeError("IPA output already exists: " + str(named))
+                ipa.rename(named)
+                ipa = named
+        outcome["ipa"] = str(ipa)
+        outcome["ipaBytes"] = ipa.stat().st_size
+        outcome["ipaSHA256"] = sha256(ipa)
+        try:
+            outcome["profile"] = validate_exported_profile(ipa, profile)
+        except (OSError, ValueError) as exc:
+            outcome["succeeded"] = False
+            outcome["profileError"] = str(exc)
     return outcome
+
+
+def validate_exported_profile(ipa: Path, profile: dict) -> dict:
+    """Check the Info.plist inside the IPA, not only the one in the archive."""
+    import zipfile
+    ipa = Path(ipa)
+    try:
+        with zipfile.ZipFile(ipa) as bundle:
+            names = [name for name in bundle.namelist()
+                     if name.startswith("Payload/") and name.endswith(".app/Info.plist")
+                     and name.count("/") == 2 and not is_metadata(name)]
+            if len(names) != 1:
+                raise ValueError("Expected one Payload app Info.plist in " + str(ipa))
+            info = plistlib.loads(bundle.read(names[0]))
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ValueError("Exported IPA is not a readable bundle: " + str(ipa)) from exc
+    actual = {"minecraftVersion": info.get("FAOTMinecraftVersion"),
+              "assetIndex": info.get("FAOTAssetIndex"),
+              "testVersion": test_version(info.get("FAOTTestVersion", ""))}
+    expected = {"minecraftVersion": profile["minecraftVersion"],
+                "assetIndex": profile["assetIndex"],
+                "testVersion": test_version(profile.get("testVersion", ""))}
+    if actual != expected:
+        raise ValueError("Exported Minecraft version, asset index or test version differs "
+                         f"from the build inputs: {actual} != {expected}")
+    return actual
 
 
 def parse_profile_devices(plist_text: str) -> list[str]:
@@ -179,13 +295,15 @@ def pull_logs(device: str, destination: Path, timeout: int) -> dict:
     return outcome
 
 
-def build_for_simulator(dylib: Path, udid: str, configuration: str, timeout: int, native_dir: Path | None = None) -> dict:
+def build_for_simulator(dylib: Path, udid: str, configuration: str, timeout: int,
+                        native_dir: Path | None = None, profile: dict | None = None) -> dict:
     """Build an unsigned simulator app; nothing here needs a provisioning profile.
 
     A physical device has to be unlocked before a foreground app may start, which makes unattended
     iteration impossible. The simulator has no such gate and its container is a plain directory on
     this Mac, so a run log can be read the moment it is written.
     """
+    profile = profile or package_profile()
     derived = HARNESS_DIR / ("simulator-graphics-build" if native_dir else "simulator-build")
     if native_dir:derived=derived/native_dir.name
     # Not wiped: an existing derived-data tree makes this incremental, and the app bundle's
@@ -197,9 +315,16 @@ def build_for_simulator(dylib: Path, udid: str, configuration: str, timeout: int
                    "-derivedDataPath", str(derived),
                    f"FAOT_CLIENT_LIBRARY={dylib}",
                    f"FAOT_GRAPHICS_NATIVE_DIR={native_dir or ''}",
+                   *package_settings(profile),
                    "CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO", "build"], timeout=timeout)
     app = derived / "Build/Products" / f"{configuration}-iphonesimulator" / "C0Harness.app"
     outcome.update({"app": str(app), "succeeded": outcome["exitCode"] == 0 and app.is_dir()})
+    if outcome["succeeded"]:
+        try:
+            outcome["profile"] = validate_package_profile(app, profile)
+        except (OSError, ValueError) as exc:
+            outcome["succeeded"] = False
+            outcome["profileError"] = str(exc)
     return outcome
 
 
@@ -251,17 +376,28 @@ def main(argv=None) -> int:
     parser.add_argument("--native-library",type=Path,action="append",default=[],help="Explicit iOS graphics dylib to validate and embed; repeat for libglfw/liblwjgl")
     parser.add_argument("--metal-library",type=Path,help="Precompiled fabricaot-present.metallib for this SDK")
     parser.add_argument("--shader-bundle",type=Path,help="Verified translate_shaders bundle directory for this SDK")
+    parser.add_argument("--minecraft-version", default=DEFAULT_VERSION,
+                        help="Packaged Minecraft line; defaults to " + DEFAULT_VERSION)
+    parser.add_argument("--asset-index",
+                        help="Packaged asset index ID; required for any non-default version")
+    parser.add_argument("--test-version", default="",
+                        help="Optional test stage label shown in the app, logs and IPA filename")
     args = parser.parse_args(argv)
     HARNESS_DIR=args.output.resolve()
 
     if (args.install or args.launch or args.pull_logs) and not args.device and not args.simulator:
         parser.error("--device is required with --install/--launch/--pull-logs unless --simulator is used")
+    try:
+        profile = package_profile(args.minecraft_version, args.asset_index, args.test_version)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     HARNESS_DIR.mkdir(parents=True, exist_ok=True)
     dylib = args.dylib.resolve()
     result: dict = {"status": "INCOMPLETE", "gateC0": "BLOCKED",
                     "scope": "host App that loads the C0 image; not a playable client",
-                    "bundleID": BUNDLE_ID, "dylib": validate_dylib(dylib, bool(args.simulator))}
+                    "bundleID": BUNDLE_ID, **profile,
+                    "dylib": validate_dylib(dylib, bool(args.simulator))}
     native_dir=None
     if args.native_library:
         names=[path.name for path in args.native_library]
@@ -286,16 +422,19 @@ def main(argv=None) -> int:
     elif args.metal_library or args.shader_bundle:parser.error("Shader libraries require explicit graphics native libraries")
 
     if args.simulator:
-        built = build_for_simulator(dylib, args.simulator, args.configuration, args.timeout,native_dir)
+        built = build_for_simulator(dylib, args.simulator, args.configuration, args.timeout,
+                                    native_dir, profile)
         result["simulator"] = args.simulator
         result["build"] = {k: built[k] for k in ("argv", "exitCode", "succeeded", "app")}
         if not built["succeeded"]:
             result["status"] = "BUILD_FAILED"
-            result["error"] = (built["stderr"] or built["stdout"]).strip().splitlines()[-8:]
+            result["error"] = ([built["profileError"]] if built.get("profileError")
+                               else (built["stderr"] or built["stdout"]).strip().splitlines()[-8:])
             (HARNESS_DIR / "result.json").write_text(json.dumps(result, indent=2) + "\n")
             print(json.dumps(result, indent=2))
             return 1
         result["status"] = "SIMULATOR_BUILT"
+        result["packagedProfile"] = built["profile"]
         result['embeddedNativeLibrariesSHA256']=verify_simulator_embedded_libraries(Path(built['app']),result.get('graphicsNativeLibraries',[]))
         if args.install or args.launch:
             result["simulatorRun"] = simulator_install_and_launch(Path(built["app"]),
@@ -316,26 +455,30 @@ def main(argv=None) -> int:
         return 0 if result["status"] in ("SIMULATOR_BUILT", "SIMULATOR_LAUNCHED") else 1
 
 
-    built = archive(dylib, args.configuration, args.timeout,native_dir)
+    built = archive(dylib, args.configuration, args.timeout,native_dir,profile)
     result["archive"] = {k: built[k] for k in ("argv", "exitCode", "succeeded", "archivePath")}
     if not built["succeeded"]:
         result["status"] = "ARCHIVE_FAILED"
-        result["error"] = (built["stderr"] or built["stdout"]).strip().splitlines()[-8:]
+        result["error"] = ([built["profileError"]] if built.get("profileError")
+                           else (built["stderr"] or built["stdout"]).strip().splitlines()[-8:])
         (HARNESS_DIR / "result.json").write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result, indent=2))
         return 1
 
     result["provisionedDevices"] = provisioned_devices(Path(built["archivePath"]))
 
-    exported = export_archive(args.timeout)
+    exported = export_archive(args.timeout, profile)
     result["export"] = {k: exported[k] for k in ("exitCode", "succeeded", "ipa", "ipaBytes", "ipaSHA256")}
     if not exported["succeeded"]:
         result["status"] = "EXPORT_FAILED"
-        result["error"] = (exported["stderr"] or exported["stdout"]).strip().splitlines()[-8:]
+        result["error"] = ([exported["profileError"]] if exported.get("profileError")
+                           else (exported["stderr"] or exported["stdout"]).strip().splitlines()[-8:])
         (HARNESS_DIR / "result.json").write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result, indent=2))
         return 1
     result["status"] = "EXPORTED"
+    # The facts read back out of the exported IPA, not just what was requested.
+    result["packagedProfile"] = exported["profile"]
 
     if args.device:
         if args.device not in result["provisionedDevices"]:

@@ -1,0 +1,34 @@
+{
+  "jar": "lwjgl-opengl-3.3.3.jar",
+  "entry": "org/lwjgl/opengl/GL.class",
+  "sha256": "840202709ce57a1f54f9f4a0369dca1434576db430f0e9c1b6d4f940e65bb99c",
+  "size": 18284,
+  "jarEntries": 528,
+  "signed": false,
+  "patchedMethod": "create()V",
+  "targetMethod": "create(Ljava/lang/String;)V",
+  "libraryName": "liblwjgl_opengl.dylib",
+  "probeMarker": "OPENGL_STARTUP_PASS",
+  "source": "/Volumes/K/AOTC/cache/owned-client/1.21.1/meta/libraries/org/lwjgl/lwjgl-opengl/3.3.3/lwjgl-opengl-3.3.3.jar",
+  "scope": "Static bytecode adaptation only; the audit records the unmodified GL.class bytes, never a patched jar.",
+  "sourceSHA256": "5062da750e5f7ec89e27e8b67b7d40fa8c4b16890159e35f828116ce6c8eca1e",
+  "iosOverlay": {
+    "path": "/Volumes/K/AOTC/builds/version-adaptation-1211/lwjgl-r5/lwjgl-ios.jar",
+    "sha256": "55c981b469dd45a0feacbdfade918d1e4a10fadd1f7dc9f4218af97ca214ce94",
+    "buildResult": "/Volumes/K/AOTC/builds/version-adaptation-1211/lwjgl-r5/result.json"
+  },
+  "hostBridge": {
+    "path": "/Volumes/K/AOTC/builds/version-adaptation-1211/lwjgl-r4/host/liblwjgl.dylib",
+    "sha256": "f79ab3115961a7b6eb8e4a6c0775dd9ee600121f867048a3228e06829a672437",
+    "buildResult": "/Volumes/K/AOTC/builds/version-adaptation-1211/lwjgl-r4/result.json"
+  },
+  "iosOverlayRequires": {
+    "Platform.get()": "IOS",
+    "reason": "lwjgl-ios.jar hard-codes Platform.get() to IOS, which is what makes GL.create() take the patched branch"
+  },
+  "shim": {
+    "symbols": ["glGetString", "OSMesaGetProcAddress"],
+    "glGetStringReturns": "first-party provider fixture",
+    "note": "Compiled per test run with xcrun clang; stands in for the iOS OSMesa/Zink provider so no real GL context is needed."
+  }
+}

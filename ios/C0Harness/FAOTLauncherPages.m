@@ -181,6 +181,11 @@ static BOOL FAOTValidOfflineName(NSString *name) {
 @property (nonatomic, strong) UIButton *launchButton;
 @property (nonatomic, strong) UIActivityIndicatorView *launchSpinner;
 @property (nonatomic, assign) BOOL launching;
+/// The runtime has stopped; the button reports the exit instead of offering a launch that
+/// cannot work in this process.
+@property (nonatomic, assign) BOOL runtimeFinished;
+@property (nonatomic, strong) UIButton *logButton;
+@property (nonatomic, copy) NSString *runtimeLogPath;
 @property (nonatomic, strong) UIStackView *savesStack;
 @property (nonatomic, strong) UILabel *savesEmptyLabel;
 @property (nonatomic, assign) CGFloat panStartYaw;
@@ -1351,8 +1356,15 @@ static NSArray<NSDictionary<NSString *, id> *> *FAOTLocalSaves(void) {
 
     self.statusLabel = FAOTMakeLabel(@"准备就绪", 11, UIFontWeightRegular, FAOTMutedTextColor());
     self.statusLabel.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
-    self.statusLabel.numberOfLines = 1;
+    // The status doubles as the exit report after the runtime stops, so it must wrap
+    // instead of truncating the reason and the log name.
+    self.statusLabel.numberOfLines = 3;
     [self.statusLabel setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisVertical];
+    // The log entry point only appears after the runtime stops: while the game owns the
+    // screen the launcher is not visible, and before launch there is nothing to inspect.
+    self.logButton = FAOTMakeButton(@"查看日志", FAOTFieldColor(), FAOTPrimaryTextColor());
+    self.logButton.hidden = YES;
+    [self.logButton addTarget:self action:@selector(logTapped) forControlEvents:UIControlEventTouchUpInside];
     self.launchButton = FAOTMakeButton(@"进入世界  →", FAOTAccentColor(), FAOTDynamicColor(UIColor.whiteColor, UIColor.blackColor));
     self.launchButton.titleLabel.font = [UIFont systemFontOfSize:19 weight:UIFontWeightBold];
     self.launchButton.layer.cornerRadius = 14;
@@ -1373,8 +1385,10 @@ static NSArray<NSDictionary<NSString *, id> *> *FAOTLocalSaves(void) {
     // height once the cards above claimed the remaining space.
     self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
     self.launchButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.logButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.statusLabel];
     [self.view addSubview:self.launchButton];
+    [self.view addSubview:self.logButton];
 
     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
@@ -1392,9 +1406,11 @@ static NSArray<NSDictionary<NSString *, id> *> *FAOTLocalSaves(void) {
         [previewCard.bottomAnchor constraintEqualToAnchor:leftColumn.bottomAnchor],
         [leftColumn.widthAnchor constraintEqualToAnchor:previewCard.widthAnchor multiplier:0.96],
         [self.statusLabel.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:24],
-        [self.statusLabel.trailingAnchor constraintLessThanOrEqualToAnchor:safe.trailingAnchor constant:-24],
-        [self.statusLabel.heightAnchor constraintEqualToConstant:14],
-        [self.statusLabel.bottomAnchor constraintEqualToAnchor:self.launchButton.topAnchor constant:-8],
+        [self.statusLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.logButton.leadingAnchor constant:-12],
+        [self.logButton.centerYAnchor constraintEqualToAnchor:self.statusLabel.centerYAnchor],
+        [self.logButton.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-24],
+        [self.logButton.widthAnchor constraintEqualToConstant:96],
+        [self.launchButton.topAnchor constraintEqualToAnchor:self.statusLabel.bottomAnchor constant:8],
         [self.launchButton.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:24],
         [self.launchButton.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-24],
         // The footer owns the bottom edge; pinning to the safe area left a visible
@@ -1464,21 +1480,23 @@ static NSArray<NSDictionary<NSString *, id> *> *FAOTLocalSaves(void) {
     self.packsValue.text = [NSString stringWithFormat:@"%lu", (unsigned long)FAOTContentCatalog.resourcePacks.count];
     self.shadersValue.text = [NSString stringWithFormat:@"%lu", (unsigned long)FAOTContentCatalog.shaderPacks.count];
     [self refreshSaves];
-    // The title only ever reads 进入世界 or 加载中. Showing a restart label after
-    // the runtime had already started was confusing, so the button keeps its
-    // launch title and the busy state is expressed by the spinner instead.
     [self updateLaunchButton];
 }
 
 - (void)updateLaunchButton {
     UIColor *titleColor = FAOTDynamicColor(UIColor.whiteColor, UIColor.blackColor);
-    self.launchButton.enabled = !self.launching;
+    self.launchButton.enabled = !self.launching && !self.runtimeFinished;
     self.launchButton.backgroundColor = FAOTAccentColor();
     [self.launchButton setTitleColor:titleColor forState:UIControlStateNormal];
     self.launchSpinner.color = titleColor;
     if (self.launching) {
         [self.launchButton setTitle:@"加载中" forState:UIControlStateNormal];
         [self.launchSpinner startAnimating];
+    } else if (self.runtimeFinished) {
+        // The isolate cannot be recreated in this process, so the button reports the exit
+        // rather than inviting a retry that can only fail.
+        [self.launchButton setTitle:@"已退出 · 重开应用" forState:UIControlStateNormal];
+        [self.launchSpinner stopAnimating];
     } else {
         [self.launchButton setTitle:@"进入世界  →" forState:UIControlStateNormal];
         [self.launchSpinner stopAnimating];
@@ -1495,6 +1513,61 @@ static NSArray<NSDictionary<NSString *, id> *> *FAOTLocalSaves(void) {
     if (!self.launching) return;
     self.launching = NO;
     [self updateLaunchButton];
+}
+
+- (void)showRuntimeFinished:(BOOL)succeeded summary:(NSString *)summary logPath:(NSString *)logPath {
+    self.launching = NO;
+    self.runtimeFinished = YES;
+    self.runtimeLogPath = logPath;
+    self.logButton.hidden = !logPath.length;
+    [self updateLaunchButton];
+    NSString *text = succeeded ? @"游戏已退出" : @"启动失败";
+    if (summary.length) text = [text stringByAppendingFormat:@"：%@", summary];
+    [self showStatus:text];
+}
+
+- (void)closeRuntimeLog {
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)logTapped {
+    NSString *path = self.runtimeLogPath;
+    if (!path.length) {
+        [self showStatus:@"还没有可查看的运行日志。"];
+        return;
+    }
+    NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    if (!text.length) text = @"（日志不是 UTF-8，可在“文件”App 的 c0-logs 目录查看原始文件）";
+    // Keep the first failure and the final runtime status in verbose logs.
+    NSUInteger maximum = 256 * 1024;
+    if (text.length > maximum) {
+        NSRange head = [text rangeOfComposedCharacterSequencesForRange:NSMakeRange(0, maximum / 4)];
+        NSRange tail = [text rangeOfComposedCharacterSequencesForRange:
+                        NSMakeRange(text.length - maximum * 3 / 4, maximum * 3 / 4)];
+        text = [NSString stringWithFormat:@"%@\n…（中间日志省略，完整内容保存在原始文件中）\n%@",
+                [text substringWithRange:head], [text substringWithRange:tail]];
+    }
+    UIViewController *viewer = [UIViewController new];
+    viewer.view.backgroundColor = UIColor.systemBackgroundColor;
+    viewer.title = path.lastPathComponent;
+    viewer.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+        initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(closeRuntimeLog)];
+    UITextView *console = [UITextView new];
+    console.editable = NO;
+    console.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
+    console.text = text;
+    console.translatesAutoresizingMaskIntoConstraints = NO;
+    [viewer.view addSubview:console];
+    UILayoutGuide *safe = viewer.view.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [console.topAnchor constraintEqualToAnchor:safe.topAnchor constant:8],
+        [console.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:12],
+        [console.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-12],
+        [console.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-8],
+    ]];
+    UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:viewer];
+    navigation.modalPresentationStyle = UIModalPresentationFullScreen;
+    [self presentViewController:navigation animated:YES completion:nil];
 }
 
 - (void)showStatus:(NSString *)status {

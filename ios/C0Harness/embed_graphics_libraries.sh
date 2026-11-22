@@ -17,7 +17,14 @@ if [ -n "${FAOT_GAME_ASSETS_DIR:-}" ]; then
     echo "error: WorldDevice requires an iPhone device destination." >&2
     exit 1
   fi
-  if [ ! -f "$FAOT_GAME_ASSETS_DIR/indexes/30.json" ] || [ ! -d "$FAOT_GAME_ASSETS_DIR/objects" ]; then
+  asset_index="${FAOT_ASSET_INDEX:-}"
+  if [ -z "$asset_index" ] && [ "${FAOT_MINECRAFT_VERSION:-26.1.2}" = 26.1.2 ]; then
+    asset_index=30
+  fi
+  case "$asset_index" in
+    ''|*[!0-9]*) echo "error: A numeric FAOT_ASSET_INDEX is required for the selected Minecraft version." >&2; exit 1 ;;
+  esac
+  if [ ! -f "$FAOT_GAME_ASSETS_DIR/indexes/$asset_index.json" ] || [ ! -d "$FAOT_GAME_ASSETS_DIR/objects" ]; then
     echo "error: Verified local Minecraft assets are missing: $FAOT_GAME_ASSETS_DIR" >&2
     exit 1
   fi

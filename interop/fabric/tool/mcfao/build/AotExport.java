@@ -128,8 +128,17 @@ public final class AotExport implements Opcodes {
     }
 
     public static void main(String[] args) throws Exception {
+        String minecraftVersion = System.getProperty("mcfao.minecraftVersion", "26.1.2");
+        if (!Set.of("26.1.2", "1.21.1").contains(minecraftVersion))
+            throw new IllegalArgumentException("Unsupported Minecraft version " + minecraftVersion);
+        if (args[0].equals("remap-mods")) {
+            var remapped = VersionModRemapper.remap(Path.of(args[2]), Path.of(args[3]),
+                    Path.of(args[4]), Path.of(args[5]), minecraftVersion);
+            Files.writeString(Path.of(args[1]), JSON.toJson(remapped));
+            return;
+        }
         if (args[0].equals("resolve")) {
-            var graph = FabricResolve.resolve(Path.of(args[2]), Path.of(args[3]), Path.of(args[4]));
+            var graph = FabricResolve.resolve(Path.of(args[2]), Path.of(args[3]), Path.of(args[4]), minecraftVersion);
             Files.writeString(Path.of(args[1]), JSON.toJson(graph));
             return;
         }
@@ -150,7 +159,7 @@ public final class AotExport implements Opcodes {
         }
         var runtimeExported = new TreeSet<String>();
         var knot = new Knot(EnvType.CLIENT);
-        ClassLoader target = knot.init(new String[]{"--version", "26.1.2", "--gameDir", args[4]});
+        ClassLoader target = knot.init(new String[]{"--version", minecraftVersion, "--gameDir", args[4]});
         if (knot.isDevelopment() || !"official".equals(knot.getMappingConfiguration().getRuntimeNamespace())) {
             throw new IllegalStateException("Expected Fabric production with the official runtime namespace");
         }
@@ -170,6 +179,11 @@ public final class AotExport implements Opcodes {
         // Keep the plugin itself out of the image; verify its bytes before folding a call.
         boolean indigoApplicable = loader.getModsInternal().stream().noneMatch(mod ->
                 mod.getMetadata().containsCustomValue("fabric-renderer-api-v1:contains_renderer"));
+        // In the 1.21.1 plugin this is an else-if: a Mod declaring its own renderer
+        // does not also force Indigo compatibility, even when both keys are present.
+        boolean indigoForceCompatibility = loader.getModsInternal().stream().anyMatch(mod ->
+                !mod.getMetadata().containsCustomValue("fabric-renderer-api-v1:contains_renderer")
+                && mod.getMetadata().containsCustomValue("fabric-renderer-indigo:force_compatibility"));
         String indigoPluginHash;
         try (var plugin = target.getResourceAsStream(RuntimeLowering.INDIGO_PLUGIN + ".class")) {
             indigoPluginHash = plugin == null ? null : hash(plugin.readAllBytes());
@@ -638,7 +652,8 @@ public final class AotExport implements Opcodes {
                                 }
                                 RuntimeLowering.lowerQueries(node, loadedIds, versions, adaptations, stubbed, protectedMethods);
                                 RuntimeLowering.collectStageQueries(node, queriedStages);
-                                RuntimeLowering.foldIndigoGate(node, indigoApplicable, indigoPluginHash, adaptations);
+                                RuntimeLowering.foldIndigoGate(node, indigoApplicable, indigoForceCompatibility,
+                                        indigoPluginHash, adaptations);
                                 RuntimeLowering.lowerGlitchCoreEvents(node, sourceHash, adaptations);
                                 RuntimeLowering.collectSerializationRoots(node, serializationRoots);
                                 RuntimeLowering.replaceGeneratedSerializer(node, adaptations);
@@ -1005,6 +1020,12 @@ public final class AotExport implements Opcodes {
                     singletonStageProviders, versions, modNames, stageOwners, earlyInitializers));
             verify(hooksNode);
             put(jar, names, STATIC_HOOKS + ".class", classBytes(hooksNode));
+            if (minecraftVersion.equals("1.21.1")) {
+                String mappingResource = "mcfao/runtime-mappings.tsv";
+                put(jar, names, mappingResource, VersionMappings.table(knot.getMappingConfiguration().getMappings()));
+                resources.add(mappingResource);
+                modClasses.add("mcfao.aot.MappingTable");
+            }
             // The generated config table is only meaningful together with the annotation
             // instances it hands to the framework; both are built from the same scan and are
             // verified here for the same reason as the hooks class.
@@ -1070,6 +1091,7 @@ public final class AotExport implements Opcodes {
         report.put("loader", FabricLoaderImpl.VERSION);
         report.put("renderer", renderer);
         report.put("namespace", "official");
+        report.put("minecraftVersion", minecraftVersion);
         report.put("resolvedMods", selected);
         report.put("classModOwners", classModOwners);
         report.put("entrypoints", entries);
@@ -1994,9 +2016,24 @@ public final class AotExport implements Opcodes {
         config.visitMaxs(0, 0);
         config.visitEnd();
 
-        // MappingResolver identity hooks. The runtime runs official names, so every resolver
-        // query returns the name it was given; callers that ask for a different namespace only
-        // ever hit this through a graceful-degradation path.
+        if (System.getProperty("mcfao.minecraftVersion", "26.1.2").equals("1.21.1")) {
+            for (String[] hook : List.of(
+                    new String[]{"mappingFieldName", "mapFieldName", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"},
+                    new String[]{"mappingMethodName", "mapMethodName", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"},
+                    new String[]{"mappingClassName", "mapClassName", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"},
+                    new String[]{"mappingUnmapClassName", "unmapClassName", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"},
+                    new String[]{"mappingNamespaces", "namespaces", "()Ljava/util/Collection;"})) {
+                var method = writer.visitMethod(ACC_PUBLIC | ACC_STATIC, hook[0], hook[2], null, null);
+                method.visitCode();
+                int count = Type.getArgumentTypes(hook[2]).length;
+                for (int index = 0; index < count; index++) method.visitVarInsn(ALOAD, index);
+                method.visitMethodInsn(INVOKESTATIC, "mcfao/aot/MappingTable", hook[1], hook[2], false);
+                method.visitInsn(ARETURN);
+                method.visitMaxs(count, count);
+                method.visitEnd();
+            }
+        } else {
+        // Unobfuscated 26.1.2 uses the existing identity mapping contract.
         var mapping = writer.visitMethod(ACC_PUBLIC | ACC_STATIC, "mappingFieldName",
                 "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", null, null);
         mapping.visitCode();
@@ -2030,6 +2067,14 @@ public final class AotExport implements Opcodes {
         namespaces.visitInsn(ARETURN);
         namespaces.visitMaxs(2, 0);
         namespaces.visitEnd();
+        }
+        var runtimeNamespace = writer.visitMethod(ACC_PUBLIC | ACC_STATIC, "mappingRuntimeNamespace",
+                "()Ljava/lang/String;", null, null);
+        runtimeNamespace.visitCode();
+        runtimeNamespace.visitLdcInsn("official");
+        runtimeNamespace.visitInsn(ARETURN);
+        runtimeNamespace.visitMaxs(1, 0);
+        runtimeNamespace.visitEnd();
         var brand = writer.visitMethod(ACC_PUBLIC | ACC_STATIC, "insertBranding", "(Ljava/lang/String;)Ljava/lang/String;", null, null);
         brand.visitCode();
         var fabric = new Label();

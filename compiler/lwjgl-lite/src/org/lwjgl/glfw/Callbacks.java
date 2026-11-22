@@ -9,7 +9,7 @@ public final class Callbacks {
             glfwSetFramebufferSizeCallback(window,null),glfwSetWindowCloseCallback(window,null),
             glfwSetWindowFocusCallback(window,null),glfwSetWindowIconifyCallback(window,null),
             glfwSetCursorEnterCallback(window,null),glfwSetKeyCallback(window,null),
-            glfwSetCharCallback(window,null),glfwSetMouseButtonCallback(window,null),
+            glfwSetCharCallback(window,null),glfwSetCharModsCallback(window,null),glfwSetMouseButtonCallback(window,null),
             glfwSetCursorPosCallback(window,null),glfwSetScrollCallback(window,null),
             glfwSetDropCallback(window,null),glfwSetIMEStatusCallback(window,null),glfwSetPreeditCallback(window,null)};
         for(Callback callback:callbacks)if(callback!=null)callback.free();

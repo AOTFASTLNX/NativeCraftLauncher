@@ -8,6 +8,21 @@
 #include <math.h>
 #include <stdlib.h>
 #import "FAOTLauncherViewController.h"
+#import "FAOTControlBridge.h"
+#import "FAOTControlCompat.h"
+#import "FAOTControlsView.h"
+#import "ControlButton.h"
+#include "glfw_keycodes.h"
+static int smokeKinds[16], smokeKeys[16], smokeActions[16], smokeCount;
+static int smokeEnqueue(void *window, int kind, double a, double b, int c, int d) {
+    if (window != (void *)0x1234 || smokeCount >= 16) abort();
+    smokeKinds[smokeCount] = kind; smokeKeys[smokeCount] = (int)a;
+    smokeActions[smokeCount++] = kind == 6 ? c : (int)b;
+    return 1;
+}
+@interface FAOTControlsView (SmokeInput)
+- (void)setInputWindow:(void *)window enqueue:(void *)enqueue;
+@end
 
 @interface SmokeSceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property (nonatomic, strong) UIWindow *window;
@@ -44,6 +59,83 @@
     [self.window makeKeyAndVisible];
 
     NSString *mode = NSProcessInfo.processInfo.environment[@"FAOT_SMOKE_MODE"];
+    if ([mode isEqualToString:@"editor-test"]) {
+        NSString *name = [@"legacy-test-" stringByAppendingString:NSUUID.UUID.UUIDString];
+        FAOTControlLayout *legacy = [FAOTControlLayout defaultLayout];
+        if (![legacy saveNamed:name error:nil]) abort();
+        NSData *before = [NSData dataWithContentsOfFile:FAOTControlMapPath(name)];
+        NSMutableDictionary *converted = FAOTControlLoadLayout(name);
+        if ([converted[@"mControlDataList"] count] != legacy.controls.count ||
+            ![before isEqualToData:[NSData dataWithContentsOfFile:FAOTControlMapPath(name)]]) abort();
+        for (NSUInteger i = 0; i < legacy.controls.count; i++) {
+            NSInteger original = legacy.controls[i].keycode;
+            NSInteger expected = original <= -101 && original >= -108 ? original + 100 : original;
+            if ([converted[@"mControlDataList"][i][@"keycodes"][0] integerValue] != expected) abort();
+        }
+        FAOTControlEditorViewController *editor = [[FAOTControlEditorViewController alloc] initWithLayout:legacy layoutName:name completion:^(FAOTControlLayout *l, BOOL s) {}];
+        editor.modalPresentationStyle = UIModalPresentationFullScreen;
+        [launcher presentViewController:editor animated:NO completion:^{
+            [editor.view layoutIfNeeded];
+            if (editor.ctrlView.subviews.count != legacy.controls.count) abort();
+            UIImageView *reference = [editor valueForKey:@"referenceImageView"];
+            if (!reference || reference.userInteractionEnabled || reference.superview != editor.view ||
+                [editor.view.subviews indexOfObject:reference] >= [editor.view.subviews indexOfObject:editor.ctrlView]) abort();
+            reference.image = [UIImage new];
+            [editor.ctrlView removeAllButtons];
+            if (!reference.image || reference.superview != editor.view) abort();
+            [editor performSelector:NSSelectorFromString(@"loadControlFile:") withObject:name];
+            if (!reference.image || editor.ctrlView.subviews.count != legacy.controls.count) abort();
+            [editor performSelector:NSSelectorFromString(@"clearReferenceImage")];
+            if (reference.image) abort();
+            NSLog(@"CONTROL_EDITOR_REFERENCE_LAYER_PASS");
+            ControlButton *moved = (ControlButton *)editor.ctrlView.subviews.firstObject;
+            CGRect originalFrame = moved.frame;
+            CGRect movedFrame = CGRectOffset(originalFrame, 20, 10);
+            [editor.undoManager beginUndoGrouping];
+            [editor doMoveOrResizeButton:moved from:originalFrame to:movedFrame];
+            [editor.undoManager endUndoGrouping];
+            CGFloat movedX = moved.frame.origin.x;
+            if (fabs(movedX - originalFrame.origin.x) < 10 || !editor.undoManager.canUndo) abort();
+            [editor.undoManager undo];
+            if (fabs(moved.frame.origin.x - originalFrame.origin.x) > 1) abort();
+            [editor.undoManager redo];
+            if (fabs(moved.frame.origin.x - movedX) > 1) abort();
+            NSLog(@"CONTROL_EDITOR_MOVE_UNDO_REDO_PASS");
+            NSUInteger initial = [editor.ctrlView.layoutDictionary[@"mControlDataList"] count];
+            [editor performSelector:NSSelectorFromString(@"actionMenuAddButton")];
+            [editor performSelector:NSSelectorFromString(@"actionMenuAddJoystick")];
+            [editor performSelector:NSSelectorFromString(@"actionMenuAddDrawer")];
+            if ([editor.ctrlView.layoutDictionary[@"mControlDataList"] count] != initial + 1 ||
+                [editor.ctrlView.layoutDictionary[@"mJoystickDataList"] count] != 1 ||
+                [editor.ctrlView.layoutDictionary[@"mDrawerDataList"] count] != 1) abort();
+            CGRect area = CGRectInset(editor.view.bounds, 30, 15);
+            setSafeArea(editor.view.bounds.size, area);
+            if (!CGRectEqualToRect(getSafeArea(editor.view.bounds), area)) abort();
+            FAOTControlsView *gameControls = [[FAOTControlsView alloc] initWithFrame:editor.view.bounds];
+            if (![gameControls loadLayoutNamed:name error:nil]) abort();
+            [gameControls setInputWindow:(void *)0x1234 enqueue:(void *)smokeEnqueue];
+            gameControls.captured = YES;
+            if (!isGrabbing) abort();
+            ControlButton *testButton = gameControls.layoutView.subviews.firstObject;
+            testButton.properties[@"keycodes"] = @[@(GLFW_KEY_W)];
+            [testButton sendActionsForControlEvents:UIControlEventTouchDown];
+            [testButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+            testButton.properties[@"keycodes"] = @[@(SPECIALBTN_MENU)];
+            [testButton sendActionsForControlEvents:UIControlEventTouchDown];
+            [testButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+            if (smokeCount != 4 || smokeKeys[0] != GLFW_KEY_W || smokeActions[0] != 1 ||
+                smokeActions[1] != 0 || smokeKeys[2] != GLFW_KEY_ESCAPE || smokeActions[2] != 1 ||
+                smokeActions[3] != 0) abort();
+            [gameControls setInputWindow:NULL enqueue:NULL];
+            NSLog(@"CONTROL_INPUT_DISPATCH_PASS");
+            [gameControls layoutIfNeeded];
+            if (!CGRectEqualToRect(gameControls.layoutView.frame, area)) abort();
+            [editor.undoManager removeAllActions];
+            [editor performSelector:NSSelectorFromString(@"actionMenuExit")];
+            [[NSFileManager defaultManager] removeItemAtPath:FAOTControlMapPath(name) error:nil];
+            NSLog(@"CONTROL_EDITOR_BEHAVIOR_PASS");
+        }];
+    }
     if ([mode isEqualToString:@"settings"]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [launcher showPage:@"settings"]; });

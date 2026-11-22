@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from preflight import scan_pack, safe_archive_path, scan_mod_bytes
+from game_versions import SUPPORTED_VERSIONS
 
 
 def jar_data(*, mixin=False, nested=False, native=False):
@@ -178,6 +179,84 @@ class PreflightTests(unittest.TestCase):
             pack_data(p, minecraft="1.20.1")
             self.assertTrue(scan_pack(p)["fatal"])
 
+    def test_default_pack_records_declared_and_target_version(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "default.mrpack"
+            pack_data(p)
+            r = scan_pack(p)
+            self.assertFalse(r["fatal"], r)
+            self.assertEqual(r["minecraft_version"], "26.1.2")
+            self.assertEqual(r["target_minecraft"], "26.1.2")
+
+    def test_1_21_1_mrpack_is_recognized_as_its_own_target(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "legacy.mrpack"
+            pack_data(p, minecraft="1.21.1")
+            r = scan_pack(p)
+            self.assertFalse(r["fatal"], r)
+            self.assertEqual(r["minecraft_version"], "1.21.1")
+            self.assertEqual(r["target_minecraft"], "1.21.1")
+            self.assertNotIn("WRONG_MC_VERSION", {f["code"] for f in r["findings"]})
+            self.assertEqual(r["fabric_loader_version"], "0.19.3")
+
+    def test_unsupported_mrpack_version_fails_without_defaulting(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "unsupported.mrpack"
+            pack_data(p, minecraft="1.20.1")
+            r = scan_pack(p)
+            self.assertTrue(r["fatal"])
+            self.assertIn("WRONG_MC_VERSION", {f["code"] for f in r["findings"]})
+            self.assertEqual(r["minecraft_version"], "1.20.1")
+            self.assertEqual(r["target_minecraft"], "")
+
+    def test_near_miss_version_strings_are_not_accepted(self):
+        for declared in ("26.1", "1.21", " 1.21.1", "1.21.1 ", "1.21.10"):
+            with self.subTest(declared=declared), tempfile.TemporaryDirectory() as d:
+                p = Path(d) / "near.mrpack"
+                pack_data(p, minecraft=declared)
+                r = scan_pack(p)
+                self.assertTrue(r["fatal"], declared)
+                self.assertIn("WRONG_MC_VERSION", {f["code"] for f in r["findings"]})
+                self.assertEqual(r["target_minecraft"], "")
+
+    def test_missing_mrpack_version_is_an_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "missing.mrpack"
+            pack_data(p, minecraft=None)
+            r = scan_pack(p)
+            self.assertTrue(r["fatal"])
+            self.assertIn("MISSING_MC_VERSION", {f["code"] for f in r["findings"]})
+            self.assertEqual(r["target_minecraft"], "")
+            self.assertIsNone(r["minecraft_version"])
+
+    def test_ambiguous_mrpack_version_is_an_error(self):
+        for declared in (["26.1.2", "1.21.1"], {"id": "26.1.2"}, 2612, True):
+            with self.subTest(declared=declared), tempfile.TemporaryDirectory() as d:
+                p = Path(d) / "ambiguous.mrpack"
+                pack_data(p, minecraft=declared)
+                r = scan_pack(p)
+                self.assertTrue(r["fatal"], declared)
+                self.assertIn("AMBIGUOUS_MC_VERSION", {f["code"] for f in r["findings"]})
+                self.assertEqual(r["target_minecraft"], "")
+
+    def test_every_supported_version_is_accepted_for_mrpack(self):
+        for version in SUPPORTED_VERSIONS:
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as d:
+                p = Path(d) / "supported.mrpack"
+                pack_data(p, minecraft=version)
+                r = scan_pack(p)
+                self.assertFalse(r["fatal"], r)
+                self.assertEqual(r["target_minecraft"], version)
+
+    def test_loader_semantics_are_unchanged_for_each_version(self):
+        for version in SUPPORTED_VERSIONS:
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as d:
+                p = Path(d) / "noloader.mrpack"
+                pack_data(p, minecraft=version, loader=None)
+                codes = {f["code"] for f in scan_pack(p)["findings"]}
+                self.assertIn("NOT_FABRIC", codes)
+                self.assertNotIn("WRONG_MC_VERSION", codes)
+
     def test_loader_rejected(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "test.mrpack"
@@ -264,6 +343,81 @@ class PreflightTests(unittest.TestCase):
             r = scan_pack(p)
             self.assertFalse(r["fatal"], r)
             self.assertEqual(len(r["mods"]), 1)
+
+    def prism(self, root, components):
+        (root / "mmc-pack.json").write_text(json.dumps({"components": components}))
+        moddir = root / ".minecraft" / "mods"
+        moddir.mkdir(parents=True)
+        (moddir / "example.jar").write_bytes(jar_data())
+        return root
+
+    def test_prism_1_21_1_instance_is_recognized(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self.prism(Path(d), [{"uid": "net.minecraft", "version": "1.21.1"},
+                                     {"uid": "net.fabricmc.fabric-loader", "version": "0.16.9"}])
+            r = scan_pack(p)
+            self.assertFalse(r["fatal"], r)
+            self.assertEqual(r["minecraft_version"], "1.21.1")
+            self.assertEqual(r["target_minecraft"], "1.21.1")
+            self.assertEqual(r["fabric_loader_version"], "0.16.9")
+            self.assertEqual(len(r["mods"]), 1)
+
+    def test_prism_unsupported_version_fails_without_defaulting(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self.prism(Path(d), [{"uid": "net.minecraft", "version": "1.20.1"},
+                                     {"uid": "net.fabricmc.fabric-loader", "version": "0.15.11"}])
+            r = scan_pack(p)
+            self.assertTrue(r["fatal"])
+            self.assertIn("WRONG_MC_VERSION", {f["code"] for f in r["findings"]})
+            self.assertEqual(r["minecraft_version"], "1.20.1")
+            self.assertEqual(r["target_minecraft"], "")
+
+    def test_prism_missing_minecraft_component_is_an_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self.prism(Path(d), [{"uid": "net.fabricmc.fabric-loader", "version": "0.19.3"}])
+            r = scan_pack(p)
+            self.assertTrue(r["fatal"])
+            self.assertIn("MISSING_MC_VERSION", {f["code"] for f in r["findings"]})
+            self.assertEqual(r["target_minecraft"], "")
+            self.assertIsNone(r["minecraft_version"])
+
+    def test_prism_duplicate_minecraft_components_are_ambiguous(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self.prism(Path(d), [{"uid": "net.minecraft", "version": "26.1.2"},
+                                     {"uid": "net.minecraft", "version": "1.21.1"},
+                                     {"uid": "net.fabricmc.fabric-loader", "version": "0.19.3"}])
+            r = scan_pack(p)
+            self.assertTrue(r["fatal"])
+            self.assertIn("AMBIGUOUS_MC_VERSION", {f["code"] for f in r["findings"]})
+            self.assertEqual(r["target_minecraft"], "")
+            self.assertEqual(r["minecraft_version"], ["26.1.2", "1.21.1"])
+
+    def test_prism_folder_without_metadata_still_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            (p / "mods").mkdir()
+            r = scan_pack(p)
+            self.assertTrue(r["fatal"])
+            self.assertIn("NO_PRISM_META", {f["code"] for f in r["findings"]})
+            self.assertEqual(r["target_minecraft"], "")
+
+    def test_prism_loader_still_required_for_supported_versions(self):
+        for version in SUPPORTED_VERSIONS:
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as d:
+                p = self.prism(Path(d), [{"uid": "net.minecraft", "version": version}])
+                r = scan_pack(p)
+                codes = {f["code"] for f in r["findings"]}
+                self.assertIn("NOT_FABRIC", codes)
+                self.assertNotIn("WRONG_MC_VERSION", codes)
+                self.assertEqual(r["target_minecraft"], version)
+
+    def test_prism_other_loader_still_rejected_for_1_21_1(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self.prism(Path(d), [{"uid": "net.minecraft", "version": "1.21.1"},
+                                     {"uid": "net.minecraftforge", "version": "52.0.1"},
+                                     {"uid": "net.fabricmc.fabric-loader", "version": "0.16.9"}])
+            codes = {f["code"] for f in scan_pack(p)["findings"]}
+            self.assertIn("OTHER_LOADER", codes)
 
     def test_prism_mod_symlink_rejected(self):
         with tempfile.TemporaryDirectory() as d:

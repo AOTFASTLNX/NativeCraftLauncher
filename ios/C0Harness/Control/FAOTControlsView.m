@@ -11,6 +11,11 @@
 #import "FAOTControlCompat.h"
 #include "glfw_keycodes.h"
 
+@protocol FAOTControlHost <NSObject>
+- (void)toggleOnScreenKeyboard;
+- (void)toggleControlVisibility;
+@end
+
 @interface FAOTControlsView ()
 @property (nonatomic, strong, readwrite) ControlLayout *layoutView;
 @property (nonatomic, copy, readwrite) NSString *layoutName;
@@ -19,6 +24,10 @@
 @end
 
 @implementation FAOTControlsView
+
+- (void)setInputWindow:(void *)window enqueue:(void *)enqueue {
+    FAOTControlSetInputTarget(window, enqueue);
+}
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
@@ -50,7 +59,7 @@
     [self releaseAllInput];
     [self.layoutView removeFromSuperview];
     ControlLayout *layout = [[ControlLayout alloc] initWithFrame:self.bounds];
-    layout.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    layout.autoresizingMask = UIViewAutoresizingNone;
     layout.backgroundColor = UIColor.clearColor;
     [self addSubview:layout];
     self.layoutView = layout;
@@ -74,16 +83,17 @@
 
 - (void)setFrame:(CGRect)frame {
     [super setFrame:frame];
-    self.layoutView.frame = self.bounds;
+    self.layoutView.frame = getSafeArea(self.bounds);
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    self.layoutView.frame = self.bounds;
+    self.layoutView.frame = getSafeArea(self.bounds);
     [self.layoutView.subviews makeObjectsPerformSelector:@selector(update)];
 }
 
 - (void)setCaptured:(BOOL)captured {
+    isGrabbing = captured;
     if (_captured == captured) return;
     if (!captured) [self releaseAllInput];
     _captured = captured;
@@ -157,13 +167,13 @@
         case SPECIALBTN_SCROLLUP: if (!down) FAOTControlSendScroll(-1.0); break;
         case SPECIALBTN_SCROLLDOWN: if (!down) FAOTControlSendScroll(1.0); break;
         case SPECIALBTN_KEYBOARD:
-            if (!down) [(id)self.nextResponder performSelector:@selector(toggleOnScreenKeyboard) withObject:nil];
+            if (!down && [self.nextResponder respondsToSelector:@selector(toggleOnScreenKeyboard)]) [(id<FAOTControlHost>)self.nextResponder toggleOnScreenKeyboard];
             break;
         case SPECIALBTN_TOGGLECTRL:
-            if (!down) [(id)self.nextResponder performSelector:@selector(toggleControlVisibility) withObject:nil];
+            if (!down && [self.nextResponder respondsToSelector:@selector(toggleControlVisibility)]) [(id<FAOTControlHost>)self.nextResponder toggleControlVisibility];
             break;
         case SPECIALBTN_MENU:
-            if (!down) [(id)self.nextResponder performSelector:@selector(showGameMenu) withObject:nil];
+            FAOTControlSendKey(GLFW_KEY_ESCAPE, down);
             break;
         default:
             break;

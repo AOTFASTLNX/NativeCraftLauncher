@@ -1,4 +1,12 @@
-import type { Report, EnvironmentCheck } from "./model";
+import {
+  DEFAULT_VERSION,
+  GAME_VERSIONS,
+  isMinecraftVersion,
+  javaVersion,
+  type Report,
+  type EnvironmentCheck,
+  type MinecraftVersion,
+} from "./model";
 export interface ResourceSelection {
   source: string;
   fingerprint: string;
@@ -29,6 +37,8 @@ export interface BuildForm {
   exportOptions: string;
   output: string;
   loader: "fabric" | "vanilla";
+  /** Minecraft line this build targets; the workbench sends it as --version. */
+  minecraftVersion: MinecraftVersion;
   source: string;
   team: string;
   quickBuild?: boolean;
@@ -180,6 +190,7 @@ export const defaultForm: BuildForm = {
   exportOptions: "",
   output: "",
   loader: "fabric",
+  minecraftVersion: DEFAULT_VERSION,
   source: "",
   team: "",
   quickBuild: false,
@@ -189,7 +200,7 @@ export const configurationFields = [
   ["caps", "iOS 能力探针", "folder"],
   ["bootstrapRuntime", "Java 25 iOS 运行库", "folder"],
   ["splitter", "方法拆分工具", "folder"],
-  ["versionMetadata", "26.1.2 版本元数据", "file"],
+  ["versionMetadata", "游戏版本元数据", "file"],
   ["assets", "已校验的游戏资源", "folder"],
   ["glfw", "GLFW / 触摸桥接", "folder"],
   ["lwjgl", "LWJGL 原生桥接", "folder"],
@@ -419,6 +430,10 @@ export function buildProblems(
     if (!report || report.source !== form.source)
       result.push("请重新选择整合包，等待来源检查完成。");
     else {
+      if (report.target_minecraft !== form.minecraftVersion)
+        result.push(
+          `整合包为 Minecraft ${report.target_minecraft}，请切换到对应版本后再构建。`,
+        );
       if (
         report.resources &&
         (!form.resourceSelection ||
@@ -441,6 +456,41 @@ export function buildProblems(
     }
   }
   return result;
+}
+
+/**
+ * Version-dependent build facts for the review step and the sidebar caption.
+ * Everything here comes from the same table the compiler contract uses, so the
+ * Java and runtime labels can never drift from the selected line.
+ */
+export function versionFacts(version: unknown): {
+  version: MinecraftVersion;
+  java: number;
+  label: string;
+  target: string;
+} {
+  const resolved = isMinecraftVersion(version) ? version : DEFAULT_VERSION;
+  const java = javaVersion(resolved);
+  return {
+    version: resolved,
+    java,
+    label:
+      GAME_VERSIONS.find((row) => row.version === resolved)?.label ??
+      `Minecraft ${resolved}`,
+    target: `iOS ARM64 · Java ${java} AOT`,
+  };
+}
+
+/** The version a form should build: the report's, else the current choice. */
+export function formVersion(
+  form: BuildForm,
+  report: Report | null,
+): MinecraftVersion {
+  if (form.loader === "fabric" && report && report.source === form.source)
+    return report.target_minecraft;
+  return isMinecraftVersion(form.minecraftVersion)
+    ? form.minecraftVersion
+    : DEFAULT_VERSION;
 }
 export function restoreForm(raw: string | null): BuildForm {
   if (!raw) return { ...defaultForm };
@@ -490,6 +540,11 @@ export function restoreForm(raw: string | null): BuildForm {
     throw new Error("快速构建选项无效");
   result.quickBuild = value.quickBuild === true;
   result.loader = value.loader === "vanilla" ? "vanilla" : "fabric";
+  // The line is stored as a plain preference so the next launch can default to
+  // it, but the source report still overrides it for any imported pack.
+  result.minecraftVersion = isMinecraftVersion(value.minecraftVersion)
+    ? value.minecraftVersion
+    : DEFAULT_VERSION;
   result.loaderVersion =
     value.loaderVersion === "0.19.3" || value.loaderVersion === "0.19.5"
       ? value.loaderVersion

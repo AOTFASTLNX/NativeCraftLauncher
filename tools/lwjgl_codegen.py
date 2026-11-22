@@ -11,7 +11,8 @@ CALLBACKS=[
     ("FramebufferSize","JII"),("WindowClose","J"),("WindowFocus","JZ"),
     ("WindowIconify","JZ"),("CursorEnter","JZ"),("Key","JIIII"),("Char","JI"),
     ("MouseButton","JIII"),("CursorPos","JDD"),("Scroll","JDD"),("Drop","JIJ"),
-    ("IMEStatus","J"),("Preedit","JIJIJII"),("STBIWrite","JJI")]
+    ("IMEStatus","J"),("Preedit","JIJIJII"),("STBIWrite","JJI"),
+    ("CharMods","JII")]
 JTYPES={"V":"void","Z":"jboolean","B":"jbyte","C":"jchar","S":"jshort",
         "I":"jint","J":"jlong","F":"jfloat","D":"jdouble"}
 CTYPES={"V":"void","Z":"uint8_t","B":"int8_t","C":"uint16_t","S":"int16_t",
