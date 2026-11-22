@@ -1267,6 +1267,7 @@ final class RuntimeLowering implements Opcodes {
                     adaptations.add(location + "isModLoaded(" + id + ")=" + loaded);
                 }
             }
+            lowerSpilledLoaderQueries(node, method, adaptations);
             lowerComputedModQueries(node, method, adaptations);
             // MappingResolver: the whole `getInstance().getMappingResolver().mapXxx(...)` chain is
             // routed to a generated version-aware hook. The
@@ -1347,6 +1348,69 @@ final class RuntimeLowering implements Opcodes {
         var previous = node.getPrevious();
         while (previous != null && previous.getOpcode() < 0) previous = previous.getPrevious();
         return previous;
+    }
+
+    /**
+     * Rewrites a Loader access whose receiver was spilled to a local variable.
+     *
+     * <p>Kotlin's lambdas keep the Loader instance in a slot before asking it anything, so
+     * {@code FabricLoader.getInstance()} is not adjacent to the query:
+     * <pre>
+     *   invokestatic  FabricLoader.getInstance
+     *   astore 0
+     *   aload 0
+     *   invokeinterface FabricLoader.getConfigDir
+     * </pre>
+     * The chain rule only sees a query directly after {@code getInstance}, which left the spilled
+     * form to the residue pass and made every such Mod throw at run time. TouchController's 26.1
+     * config directory provider is exactly this shape, and it runs during client startup.
+     *
+     * <p>Only the slot written by {@code getInstance} and read once by the query is rewritten: the
+     * call is replaced by the same hook the chain rule installs, and both the store and the load
+     * disappear, so no Loader value survives. A slot that is read more than once is skipped and
+     * keeps the existing unsupported-API failure instead of being half rewritten.
+     */
+    private static void lowerSpilledLoaderQueries(ClassNode node, MethodNode method, List<String> adaptations) {
+        for (var instruction : method.instructions.toArray()) {
+            if (!(instruction instanceof MethodInsnNode instance) || !instance.owner.equals(LOADER)
+                    || !instance.name.equals("getInstance") || !instance.desc.equals("()L" + LOADER + ";")
+                    || instance.getOpcode() != INVOKESTATIC) continue;
+            var store = nextReal(instance);
+            if (!(store instanceof VarInsnNode slot) || slot.getOpcode() != ASTORE) continue;
+            int index = slot.var;
+            AbstractInsnNode load = null;
+            AbstractInsnNode query = null;
+            int loads = 0;
+            for (var candidate : method.instructions.toArray()) {
+                if (candidate instanceof VarInsnNode read && read.var == index
+                        && (read.getOpcode() == ALOAD || read.getOpcode() == ASTORE)) {
+                    loads++;
+                    if (read.getOpcode() == ALOAD && read != store) {
+                        load = read;
+                        query = nextReal(read);
+                    }
+                }
+            }
+            // Two occurrences are the store and this load; anything else means the value is
+            // reused, so the rewrite below would change semantics.
+            if (loads != 2 || load == null || query == null) continue;
+            String location = node.name + "#" + method.name + " ";
+            if (isQuery(query, "getConfigDir", "()Ljava/nio/file/Path;")) {
+                method.instructions.set(query, new MethodInsnNode(INVOKESTATIC, HOOKS, "configDir",
+                        "()Ljava/nio/file/Path;", false));
+                method.instructions.remove(load);
+                method.instructions.remove(store);
+                method.instructions.remove(instance);
+                adaptations.add(location + "getConfigDir=launch directory/config (spilled receiver)");
+            } else if (isQuery(query, "getGameDir", "()Ljava/nio/file/Path;")) {
+                method.instructions.set(query, new FieldInsnNode(GETSTATIC, HOOKS, "GAME_DIR",
+                        "Ljava/nio/file/Path;"));
+                method.instructions.remove(load);
+                method.instructions.remove(store);
+                method.instructions.remove(instance);
+                adaptations.add(location + "getGameDir=launch directory (spilled receiver)");
+            }
+        }
     }
 
     private static void lowerComputedModQueries(ClassNode node, MethodNode method, List<String> adaptations) {

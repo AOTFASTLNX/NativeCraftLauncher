@@ -100,6 +100,28 @@ class RuntimeLoweringTests(unittest.TestCase):
 
     @unittest.skipUnless((PREPARED / "result.json").is_file(),
                          "Requires the pinned local Java/ASM toolchain")
+    def test_loader_query_through_a_spilled_receiver_is_lowered(self):
+        # TouchController's Kotlin config provider stores getInstance() in a slot before asking
+        # for the config directory, and the client died on startup when that form was missed.
+        home, _, engine, _ = load_reference(PREPARED)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            classes = output / "classes"
+            classes.mkdir()
+            compile_java(home, engine, [
+                ROOT / "interop/fabric/tool/mcfao/build/RuntimeLowering.java",
+                ROOT / "interop/diagnostics/SpilledLoaderQueryProbe.java",
+            ], classes, output / "compile")
+            result = capture([str(home / "bin/java"), "-cp",
+                              ":".join(map(str, [classes, *engine])),
+                              "mcfao.build.SpilledLoaderQueryProbe"], output / "run", 30)
+            self.assertEqual(result["exitCode"], 0,
+                             (output / "run/stderr.log").read_text())
+            self.assertIn("SPILLED_LOADER_QUERY_PASS",
+                          (output / "run/stdout.log").read_text())
+
+    @unittest.skipUnless((PREPARED / "result.json").is_file(),
+                         "Requires the pinned local Java/ASM toolchain")
     def test_json_reads_through_a_mod_wrapper_register_their_type(self):
         home, _, engine, _ = load_reference(PREPARED)
         with tempfile.TemporaryDirectory() as directory:
