@@ -11,6 +11,7 @@ async function desktop(page: Page, options: { slow?: boolean } = {}) {
       directory: "/fixture/Unified Storage",
       saveFail: false,
       slow,
+      cleanupFail: false,
       scanPolls: 0,
       cancelled: false,
     };
@@ -31,17 +32,14 @@ async function desktop(page: Page, options: { slow?: boolean } = {}) {
       unsigned: true,
     };
     localStorage.setItem("ncl.builder.v2", JSON.stringify(form));
-    const plan = () => ({
+    // storage-snapshot carries usage only; cleanup groups arrive from a
+    // separate storage-plan call, exactly as the Python service answers.
+    const usage = () => ({
       status: "STORAGE_PLAN",
       dataRoot: "/fixture",
       freeBytes: 64 * GiB,
-      reclaimBytes: state.cleaned || state.blocked ? 0 : 14 * GiB,
       managedBytes: (state.cleaned ? 36 : 50) * GiB,
       scannedAt: "2026-11-17T12:30:00Z",
-      blocked: state.blocked,
-      reason: state.blocked
-        ? "自定义目录支持占用统计与 Finder 管理，暂不提供自动清理。"
-        : "",
       warnings: [],
       volumes: [
         {
@@ -83,6 +81,13 @@ async function desktop(page: Page, options: { slow?: boolean } = {}) {
           },
         ],
       })),
+    });
+    const cleanup = () => ({
+      reclaimBytes: state.cleaned || state.blocked ? 0 : 14 * GiB,
+      blocked: state.blocked,
+      reason: state.blocked
+        ? "自定义目录支持占用统计与 Finder 管理，暂不提供自动清理。"
+        : "",
       groups:
         state.blocked || state.cleaned
           ? []
@@ -137,7 +142,7 @@ async function desktop(page: Page, options: { slow?: boolean } = {}) {
             if (state.fail) throw new Error("磁盘已断开，请重新连接");
             return {
               cached: !state.slow,
-              plan: state.slow ? null : { ...plan(), cached: true, scanState: "cached", ageSeconds: 42 },
+              plan: state.slow ? null : { ...usage(), cached: true, scanState: "cached", ageSeconds: 42 },
               task: null,
             };
           }
@@ -167,11 +172,12 @@ async function desktop(page: Page, options: { slow?: boolean } = {}) {
           }
           if (args.action === "storage-refresh") {
             if (state.slow) return { incremental: false, plan: null };
-            return { incremental: true, plan: { ...plan(), scanState: "incremental", incremental: true } };
+            return { incremental: true, plan: { ...usage(), scanState: "incremental", incremental: true } };
           }
           if (args.action === "storage-plan") {
+            if (state.cleanupFail) throw new Error("清理计划读取失败");
             if (state.fail) throw new Error("磁盘已断开，请重新连接");
-            return plan();
+            return { ...usage(), ...cleanup() };
           }
           if (args.action === "storage-clean") {
             state.cleaned = true;
@@ -343,6 +349,23 @@ test("read-only directories and failed rescans show specific reasons", async ({
   await expect(
     page.getByRole("button", { name: "重新扫描", exact: true }),
   ).toBeEnabled();
+});
+
+test("a failed cleanup preview keeps the usage page on screen", async ({
+  page,
+}) => {
+  // The cached snapshot has no cleanup fields; a rejected storage-plan call
+  // must not take the distribution down with it.
+  await desktop(page);
+  await page.evaluate(() => {
+    (window as any).__storageTest.cleanupFail = true;
+  });
+  await page.getByRole("button", { name: "重新扫描", exact: true }).click();
+  await expect(page.locator(".sm-stats")).toContainText("Builder 文件占用");
+  await expect(
+    page.getByRole("region", { name: "存储管理" }).getByRole("alert"),
+  ).toContainText("清理计划读取失败");
+  await expect(page.locator(".sm-categories > button")).toHaveCount(4);
 });
 
 test("cached numbers render first and a background scan can be cancelled", async ({
