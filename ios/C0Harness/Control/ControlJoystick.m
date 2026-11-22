@@ -131,7 +131,7 @@ NSMutableDictionary* createButton(NSString* name, int* keycodes, NSString* dynam
 
     static char lastDirection = -2;
     char direction = -1;
-    if (xValue != 0 && yValue != 0) {
+    if (xValue != 0 || yValue != 0) {
         CGFloat degree = atan2f(yValue, xValue) * (180.0 / M_PI);
         if (degree < 0) {
             degree += 360;

@@ -12,6 +12,14 @@
 
 - (void)loadControlLayout:(NSMutableDictionary *)layoutDictionary {
     self.layoutDictionary = layoutDictionary;
+    for (NSString *key in @[@"mControlDataList", @"mDrawerDataList", @"mJoystickDataList"]) {
+        if (![self.layoutDictionary[key] isKindOfClass:NSMutableArray.class]) {
+            self.layoutDictionary[key] = [NSMutableArray array];
+        }
+    }
+    if ([self.layoutDictionary[@"scaledAt"] floatValue] <= 0) {
+        self.layoutDictionary[@"scaledAt"] = @(getPrefFloat(@"control.button_scale"));
+    }
 
     CGFloat currentScale = [self.layoutDictionary[@"scaledAt"] floatValue];
     CGFloat savedScale = getPrefFloat(@"control.button_scale");
@@ -22,6 +30,7 @@
 
 - (void)loadControlFile:(NSString *)name {
     [self removeAllButtons];
+    self.failedLayoutName = nil;
 
     /* The bridge writes the shipped default on first use, so a fresh install always has
        something to edit instead of an error dialog. */
@@ -35,8 +44,9 @@
                                                                         [NSString stringWithFormat:@"Could not open %@", name]}]} mutableCopy];
     }
     if (self.layoutDictionary[@"NSErrorObject"] != nil) {
+        self.failedLayoutName = [name stringByDeletingPathExtension];
         showDialog(localize(@"Error", nil), [self.layoutDictionary[@"NSErrorObject"] localizedDescription]);
-        return;
+        self.layoutDictionary = FAOTDefaultControlLayoutDictionary();
     }
     [self loadControlLayout:self.layoutDictionary];
 }
@@ -48,17 +58,11 @@
 
 - (BOOL)canPerformAction:(SEL)action withSender:(id)sender
 {
-    return action == @selector(actionMenuExit:) ||
-        action == @selector(actionMenuSave:) ||
-        action == @selector(actionMenuLoad:) ||
-        action == @selector(actionMenuSetDef:) ||
-        action == @selector(actionMenuAddButton:) ||
-        action == @selector(actionMenuAddDrawer:) ||
-        action == @selector(actionMenuAddSubButton:) ||
-        action == @selector(actionMenuBtnCopy:) ||
-        action == @selector(actionMenuBtnDelete:) ||
-        action == @selector(actionMenuBtnEdit:) ||
-        action == @selector(actionMenuBtnSafeArea:);
+    return action == @selector(actionMenuExit) || action == @selector(actionMenuSave) ||
+        action == @selector(actionMenuLoad) || action == @selector(actionMenuSafeArea) ||
+        action == @selector(actionMenuAddButton) || action == @selector(actionMenuAddDrawer) ||
+        action == @selector(actionMenuAddJoystick) || action == @selector(actionMenuAddSubButton) ||
+        action == @selector(actionMenuBtnDelete) || action == @selector(actionMenuBtnEdit);
 }
 
 - (BOOL)canBecomeFirstResponder {
