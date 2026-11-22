@@ -44,6 +44,34 @@
     [self.window makeKeyAndVisible];
 
     NSString *mode = NSProcessInfo.processInfo.environment[@"FAOT_SMOKE_MODE"];
+    if ([mode isEqualToString:@"settings"]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [launcher showPage:@"settings"]; });
+    }
+    if ([mode isEqualToString:@"controlpanel"]) {
+        /* Open the per-button property sheet the way a tap on a layout button does. */
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            CustomControlsViewController *editor =
+                [[FAOTControlEditorViewController alloc] initWithLayout:nil
+                                                            layoutName:@"default"
+                                                            completion:^(FAOTControlLayout *l, BOOL s) {}];
+            editor.modalPresentationStyle = UIModalPresentationFullScreen;
+            [launcher presentViewController:editor animated:NO completion:^{
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    for (UIView *view in editor.ctrlView.subviews) {
+                        if (![view isKindOfClass:ControlButton.class]) continue;
+                        CCMenuViewController *panel = [CCMenuViewController new];
+                        panel.targetButton = (ControlButton *)view;
+                        panel.modalPresentationStyle = UIModalPresentationOverFullScreen;
+                        [editor presentViewController:panel animated:NO completion:nil];
+                        break;
+                    }
+                });
+            }];
+        });
+    }
     if ([mode isEqualToString:@"editor"]) {
         FAOTControlLayout *layout = [FAOTControlLayout layoutFromPojavData:[FAOTPojavDefaultLayoutJSON() dataUsingEncoding:NSUTF8StringEncoding]
                                                                      error:nil] ?: [FAOTControlLayout defaultLayout];

@@ -33,11 +33,12 @@ jobs:
             if [ "$PLATFORM" = iphonesimulator ]; then TARGET=arm64-apple-ios17.0-simulator; fi
             xcrun clang -fsyntax-only -fobjc-arc -fblocks -target "$TARGET" -isysroot "$SDK" \
               -Werror=implicit-function-declaration -Werror=incompatible-pointer-types \
-              -Iios/C0Harness -Iios/glfw-lite -I"$JDK/include" -I"$JDK/include/darwin" \
+              -Iios/C0Harness -Iios/C0Harness/Control -Iios/glfw-lite -I"$JDK/include" -I"$JDK/include/darwin" \
               ios/C0Harness/FAOTControlLayout.m ios/C0Harness/FAOTControlsOverlay.m \
               ios/C0Harness/FAOTLauncherViewController.m ios/C0Harness/FAOTControlEditorViewController.m \
               ios/C0Harness/FAOTLauncherPages.m ios/C0Harness/FAOTAccountStore.m \
               ios/C0Harness/FAOTAuthService.m ios/C0Harness/FAOTSkinView.m \
+              ios/C0Harness/Control/*.m \
               ios/metal-bridge/metal_bridge.m
           done
       - name: Execute Metal snapshot lifetime regression
@@ -100,14 +101,15 @@ jobs:
           xcrun --sdk iphonesimulator clang \
             -target arm64-apple-ios17.0-simulator -isysroot "$SDK" \
             -fobjc-arc -O1 -Wall \
-            -I ios/C0Harness \
+            -I ios/C0Harness -I ios/C0Harness/Control \
             ios/C0Harness/FAOTControlLayout.m ios/C0Harness/FAOTControlsOverlay.m \
             ios/C0Harness/FAOTLauncherViewController.m ios/C0Harness/FAOTControlEditorViewController.m \
             ios/C0Harness/FAOTLauncherPages.m ios/C0Harness/FAOTAccountStore.m \
             ios/C0Harness/FAOTAuthService.m ios/C0Harness/FAOTSkinView.m \
+            ios/C0Harness/Control/*.m \
             tests/launcher_smoke_main.m \
             -framework UIKit -framework Foundation -framework CoreGraphics -framework QuartzCore \
-            -framework Security \
+            -framework Security -framework CoreImage \
             -o "$APP/Native Craft"
           codesign --force --sign - "$APP"
           ls -la "$APP"

@@ -6,6 +6,8 @@
 #import <UIKit/UIKit.h>
 #import "FAOTControlLayout.h"
 
+#import "CustomControlsViewController.h"
+
 #import "test_version.h"
 
 NS_ASSUME_NONNULL_BEGIN
@@ -24,10 +26,14 @@ extern NSString *const FAOTLanguageDefaultsKey;       // NSString, Minecraft loc
 
 + (FAOTControlLayout *)activeLayout;
 
+/// Switches the visible sidebar page: game, account, resources or settings.
+- (void)showPage:(NSString *)key;
+
 @end
 
-/// Full-screen editor over a black canvas; nil layout starts from the built-in default.
-@interface FAOTControlEditorViewController : UIViewController
+/// Full-screen editor; a subclass of the ported Pojav/Amethyst control editor so the
+/// launcher and the game share one control implementation.
+@interface FAOTControlEditorViewController : CustomControlsViewController
 - (instancetype)initWithLayout:(FAOTControlLayout *)layout
                     layoutName:(NSString *)layoutName
                     completion:(void (^)(FAOTControlLayout *layout, BOOL saved))completion;

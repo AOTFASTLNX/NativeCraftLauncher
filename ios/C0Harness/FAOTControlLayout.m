@@ -2,8 +2,8 @@
 //  FAOTControlLayout.m
 //
 #import "FAOTControlLayout.h"
+#import "FAOTControlBridge.h"
 
-static NSString *const kFAOTLayoutDirectory = @"controlmap";
 static NSString *const kFAOTDefaultName = @"default";
 
 #pragma mark - Key names
@@ -400,8 +400,7 @@ static CGFloat FAOTEvaluateExpression(NSString *expression, NSDictionary<NSStrin
 #pragma mark Persistence
 
 + (NSString *)layoutDirectory {
-    NSString *documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    return [documents stringByAppendingPathComponent:kFAOTLayoutDirectory];
+    return FAOTControlMapDirectory();
 }
 
 + (NSArray<NSString *> *)availableLayouts {
