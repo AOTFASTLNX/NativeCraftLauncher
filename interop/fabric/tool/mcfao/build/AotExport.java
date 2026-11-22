@@ -351,7 +351,32 @@ public final class AotExport implements Opcodes {
         // cannot lower, so a Mod set can be triaged in a single pass.
         var failures = new ArrayList<String>();
         var stubbed = new TreeSet<String>();
+        var duplicateMixinClasses = new TreeSet<String>();
         int hooks = 0;
+        // Every Mixin package the Loader knows about, including the ones nested Mod Jars
+        // declare. A nested Jar is its own Mod with its own config, so restricting the scan to
+        // the requested root ids left those packages unknown and their Mixin classes were handed
+        // to Knot as ordinary classes.
+        var allMixinPackages = new TreeSet<String>();
+        for (var mod : loader.getModsInternal()) {
+            if (!requested.contains(mod.getMetadata().getId())) continue;
+            for (String config : mod.getMetadata().getMixinConfigs(EnvType.CLIENT)) {
+                for (Path root : mod.getRootPaths()) {
+                    Path configPath = root.resolve(config);
+                    if (!Files.isRegularFile(configPath)) configPath = nestedMixinConfig(root, config);
+                    if (configPath == null) continue;
+                    try (var reader = Files.newBufferedReader(configPath)) {
+                        JsonObject parsed = JSON.fromJson(reader, JsonObject.class);
+                        if (parsed.has("package")) {
+                            allMixinPackages.add(parsed.get("package").getAsString().replace('.', '/') + "/");
+                        }
+                        if (parsed.has("plugin")) {
+                            mixinPlugins.add(parsed.get("plugin").getAsString().replace('.', '/'));
+                        }
+                    }
+                }
+            }
+        }
         try (var base = new ZipFile(client.toFile());
              var jar = new ZipOutputStream(Files.newOutputStream(output.resolve("overlay.jar")))) {
             for (var original : base.stream().toList()) {
@@ -460,7 +485,17 @@ public final class AotExport implements Opcodes {
                 for (Path root : mod.getRootPaths()) {
                     var mixinPackages = new ArrayList<String>();
                     for (String config : mod.getMetadata().getMixinConfigs(EnvType.CLIENT)) {
-                        try (var reader = Files.newBufferedReader(root.resolve(config))) {
+                        // A nested Mod Jar carries its own Mixin config, and the Loader hands the
+                        // nested Jar to this loop as its own root. Reading only the outer jar left
+                        // the nested package unknown, so its Mixin classes were handed to Knot as
+                        // ordinary classes and Knot refused them. Fall back to the Loader's own
+                        // view of the config, which resolves the nested root.
+                        Path configPath = root.resolve(config);
+                        if (!Files.isRegularFile(configPath)) {
+                            configPath = nestedMixinConfig(root, config);
+                        }
+                        if (configPath == null) continue;
+                        try (var reader = Files.newBufferedReader(configPath)) {
                             JsonObject parsed = JSON.fromJson(reader, JsonObject.class);
                             String pkg = parsed.get("package").getAsString();
                             mixinPackages.add(pkg.replace('.', '/') + "/");
@@ -554,8 +589,17 @@ public final class AotExport implements Opcodes {
                                         earlyInitializers, adaptations);
                                 continue;
                             }
-                            boolean mixinPackage = mixinPackages.stream().anyMatch(name::startsWith);
+                            boolean mixinPackage = mixinPackages.stream().anyMatch(name::startsWith)
+                                    || allMixinPackages.stream().anyMatch(name::startsWith);
                             if (mixinPackage) {
+                                if (names.contains(name)) {
+                                    // A bundle may ship the same Mixin class in more than one
+                                    // nested Jar (TouchController keeps a shared copy beside its
+                                    // per-line adapter). The first definition wins, matching the
+                                    // Loader's own classpath order, and the duplicate is recorded.
+                                    duplicateMixinClasses.add(id + "!" + name);
+                                    continue;
+                                }
                                 // A mixin is read from the jar instead of being transformed by
                                 // Knot, which refuses to hand out a class a Mixin config owns.
                                 //
@@ -618,6 +662,14 @@ public final class AotExport implements Opcodes {
                                 continue;
                             }
                             if (base.getEntry(name) != null) throw new IllegalArgumentException("Mod shadows Minecraft: " + name);
+                            if (names.contains(name)) {
+                                // A bundle can ship one class in several nested Jars: TouchController
+                                // keeps a shared copy beside its per-line adapter. The Loader sees
+                                // whichever root comes first, so the first definition wins here too
+                                // and the duplicate is recorded instead of failing the export.
+                                duplicateMixinClasses.add(id + "!" + name);
+                                continue;
+                            }
                             int previousAdaptations = adaptations.size();
                             int previousStubs = stubbed.size();
                             try {
@@ -640,6 +692,9 @@ public final class AotExport implements Opcodes {
                                 RuntimeLowering.lowerJadeMetadata(node, sourceHash,
                                         jadeFlags, jadeDisabledTooltips, adaptations);
                                 RuntimeLowering.lowerModFile(node, sourceHash, adaptations);
+                                RuntimeLowering.lowerIosTransport(node, adaptations);
+                                RuntimeLowering.lowerUnreachableTransport(node, adaptations);
+                                RuntimeLowering.lowerPlatformNativeBranch(node, adaptations);
                                 RuntimeLowering.lowerLoaderMetadata(node, sourceHash, adaptations);
                                 RuntimeLowering.lowerVersionLookup(node, sourceHash, adaptations);
                                 RuntimeLowering.lowerSodiumMetadata(node, sourceHash, adaptations);
@@ -2420,6 +2475,25 @@ public final class AotExport implements Opcodes {
     private static Stream<Path> contentFiles(Path root) throws IOException {
         return Files.walk(root).filter(path -> !isMacMetadata(root.relativize(path).toString()))
                 .filter(Files::isRegularFile);
+    }
+
+    /**
+     * Locates a Mixin config that a nested Mod Jar declares.
+     *
+     * The Loader exposes a nested Jar as its own root, but the config name in the metadata is
+     * relative to that nested Jar, not to the outer one. A root that does not hold the file
+     * directly may still be the parent of the nested root that does, so the search is bounded
+     * by the archive tree instead of guessing a sibling path.
+     */
+    private static Path nestedMixinConfig(Path root, String config) throws IOException {
+        Path direct = root.resolve(config);
+        if (Files.isRegularFile(direct)) return direct;
+        try (var files = Files.walk(root, 4)) {
+            return files.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().equals(
+                            Path.of(config).getFileName().toString()))
+                    .findFirst().orElse(null);
+        }
     }
 
     static void writeRuntimeClasses(Path root, ZipOutputStream jar, Set<String> names,

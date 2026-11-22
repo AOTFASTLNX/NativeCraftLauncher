@@ -269,6 +269,7 @@ def bootstrap(workspace, version=DEFAULT_VERSION):
     return dict(workspace=str(workspace), bundled=bundled, setup=setup, config=str(config) if config else '', configFields=fields,
                 minecraftVersion=version, versions=list(SUPPORTED_VERSIONS),
                 loaders=loaders,
+                recommendedResources=recommended_resources(workspace, version),
                 exportOptions=str(workspace / 'ios/C0Harness/ExportOptions.plist'),
                 output=str(storage_paths(workspace)['builds']), storage={k: str(v) for k, v in storage_paths(workspace).items()}, jobs=history(workspace))
 
@@ -520,6 +521,16 @@ def validate_request(request):
     if request.get('loaderVersion') not in (None, '', 'auto') and request['loaderVersion'] not in verified_loaders(read_json(workspace / 'compiler/fabric.lock.json')):
         raise ValueError('请选择已验证的 Fabric Loader 版本')
     if not isinstance(request.get('quickBuild', False), bool): raise ValueError('快速构建选项必须为布尔值')
+    recommended = request.get('recommendedResources')
+    if recommended is not None:
+        if (not isinstance(recommended, list) or len(recommended) > 32
+                or any(not isinstance(x, str) or not x for x in recommended)
+                or len(set(recommended)) != len(recommended)):
+            raise ValueError('推荐资源选择格式无效')
+        if recommended:
+            # Resolving here rejects an unknown id before a job is queued, and keeps the
+            # pinned file list out of the request the UI has to hold.
+            recommended_entries(workspace, request.get('minecraftVersion'), recommended)
     if request.get('icon') and not isinstance(request.get('icon'), str): raise ValueError('图标路径必须是文本')
     if request.get('icon'):
         app_icon.icon_path(request['icon'])
@@ -562,6 +573,37 @@ def validate_request(request):
 
 DOWNLOAD_HOST = 'cdn.modrinth.com'
 
+RECOMMENDED_FILE = 'compiler/recommended-resources.json'
+
+
+def recommended_resources(workspace, version):
+    """NCL-verified optional Mods offered on the resource step.
+
+    Each entry is pinned to an exact file and hash, so the offer cannot drift into an
+    unverified version. A pack that already ships the Mod reports it as present instead of
+    asking to download a second copy.
+    """
+    path = Path(workspace) / RECOMMENDED_FILE
+    if not path.is_file():
+        return []
+    lock = read_json(path)
+    if lock.get('schemaVersion') != 1 or lock.get('minecraft') != version:
+        return []
+    rows = []
+    for entry in lock.get('resources') or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get('id'), str):
+            raise ValueError('推荐资源清单格式无效')
+        requires = [row for row in entry.get('requires') or [] if isinstance(row, dict)]
+        rows.append(dict(
+            id=entry['id'], name=entry.get('name') or entry['id'],
+            summary=entry.get('summary') or '', detail=entry.get('detail') or '',
+            version=entry.get('version') or '', file=entry.get('file') or '',
+            size=entry.get('size') if isinstance(entry.get('size'), int) else 0,
+            requires=[dict(id=row.get('id') or '', name=row.get('name') or row.get('id') or '',
+                           file=row.get('file') or '') for row in requires],
+            loader=entry.get('verifiedAgainst', {}).get('loader') or []))
+    return rows
+
 def download_opener():
     return urllib.request.build_opener(DownloadRedirect(), urllib.request.HTTPSHandler(context=tls_context()))
 
@@ -574,6 +616,54 @@ def download_url(value):
 class DownloadRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return super().redirect_request(req, fp, code, msg, headers, download_url(urljoin(req.full_url, newurl)))
+
+def download_pinned(entry, target):
+    """Fetch one pinned recommended file and verify its size and every recorded hash."""
+    url = download_url(entry['url'])
+    expected = entry['size']
+    if not isinstance(expected, int) or isinstance(expected, bool) or not 0 <= expected <= LIMIT:
+        raise ValueError('推荐资源大小超出限制：' + str(entry.get('file')))
+    opener = download_opener()
+    request = urllib.request.Request(url, headers={'User-Agent': 'NCL-Builder/0.2'})
+    with opener.open(request, timeout=60) as response:
+        if response.status != 200:
+            raise ValueError(f'下载失败 HTTP {response.status}')
+        data = response.read(expected + 1)
+    if len(data) != expected:
+        raise ValueError('推荐资源大小与清单不符：' + str(entry.get('file')))
+    for algo in ('sha512', 'sha1'):
+        digest = entry.get(algo)
+        if digest and hashlib.new(algo, data).hexdigest() != digest.lower():
+            raise ValueError('推荐资源哈希校验失败：' + str(entry.get('file')))
+    target.write_bytes(data)
+
+
+def recommended_entries(workspace, version, wanted):
+    """Resolve the ticked recommendation ids into pinned files plus their requirements."""
+    if not wanted:
+        return []
+    path = Path(workspace) / RECOMMENDED_FILE
+    lock = read_json(path)
+    if lock.get('schemaVersion') != 1 or lock.get('minecraft') != version:
+        raise ValueError('推荐资源清单与当前 Minecraft 版本不匹配')
+    available = {row['id']: row for row in lock.get('resources') or []
+                 if isinstance(row, dict) and isinstance(row.get('id'), str)}
+    unknown = sorted(set(wanted) - set(available))
+    if unknown:
+        raise ValueError('未知的推荐资源：' + ', '.join(unknown))
+    selected, seen = [], set()
+    for ident in wanted:
+        entry = available[ident]
+        for row in [entry, *(entry.get('requires') or [])]:
+            name = row.get('file')
+            if not isinstance(name, str) or Path(name).name != name or not name.endswith('.jar'):
+                raise ValueError('推荐资源文件名无效：' + str(name))
+            if name in seen:
+                continue
+            seen.add(name)
+            selected.append(row)
+    return selected
+
 
 def download(entry, target):
     # urllib uses the macOS system proxy and the standard *_proxy environment variables.
@@ -598,9 +688,11 @@ def download(entry, target):
         except (OSError, ValueError, http.client.HTTPException) as e: last = e
     raise ValueError(str(last or '没有下载地址'))
 
-def stage_source(source, destination, progress=lambda _: None, cancelled=lambda: False, *, selection=None, loader_version=None, version=None):
+def stage_source(source, destination, progress=lambda _: None, cancelled=lambda: False, *, selection=None,
+                 loader_version=None, version=None, recommended_ids=None, workspace=None):
     report = scan_pack(source)
     version = source_version(report, version)
+    workspace = Path(workspace or ROOT)
     lock = read_json(ROOT / 'compiler/fabric.lock.json')
     chosen = select_loader(lock, report.get('fabric_loader_version'), loader_version)
     loader = chosen['version']
@@ -684,6 +776,22 @@ def stage_source(source, destination, progress=lambda _: None, cancelled=lambda:
                     budget(item.file_size)
                     target = target_for(item.filename[len(prefix):], layer)
                     with archive.open(item) as src, target.open('wb') as dst: shutil.copyfileobj(src, dst, 1024 * 1024)
+    # Recommended Mods land after the pack is staged, so a pack that already ships one keeps
+    # its own copy and the tick only adds what is genuinely missing.
+    recommended = recommended_entries(workspace, version, recommended_ids)
+    if recommended:
+        mods_folder = game / 'mods'
+        mods_folder.mkdir(parents=True, exist_ok=True)
+        existing = {path.name for path in mod_candidates(mods_folder)}
+        for entry in recommended:
+            name = entry['file']
+            if name in existing:
+                progress('整合包已包含推荐资源，保留原文件：' + name)
+                continue
+            budget(entry['size'])
+            progress('下载推荐资源：' + name)
+            download_pinned(entry, mods_folder / name)
+            existing.add(name)
     clean_staged_metadata(game)
     mods = game / 'mods'
     if not mods.is_dir() or not mod_candidates(mods): raise ValueError('没有 Fabric Mod JAR；无 Mod 时请选择原版')
@@ -1081,7 +1189,7 @@ def run_job(path):
                     expected = {name: digest for name, digest in record['filesSHA256'].items() if not is_metadata(name)}
                     if actual != expected: raise ValueError('暂存内容发生变化，请新建构建')
                     mods = game / 'mods'
-                else: mods, game = stage_source(resolve(request['source']), source, lambda s: print(s, flush=True), lambda: CANCELLED or (folder / 'cancel').exists(), selection=request.get('resourceSelection'), loader_version=request.get('fabricLoaderVersion'), version=request.get('minecraftVersion'))
+                else: mods, game = stage_source(resolve(request['source']), source, lambda s: print(s, flush=True), lambda: CANCELLED or (folder / 'cancel').exists(), selection=request.get('resourceSelection'), loader_version=request.get('fabricLoaderVersion'), version=request.get('minecraftVersion'), recommended_ids=request.get('recommendedResources'), workspace=workspace)
                 update(compatibilityOverrides=read_json(source / 'source.json').get('compatibilityOverrides', []))
                 update(sourceFolder=str(source))
             execute([*command, 'doctor', '--renderer', 'gl41', '--config', resolve(request['config'])], folder, 'doctor', update, 'doctor', env)

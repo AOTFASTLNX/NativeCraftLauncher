@@ -33,11 +33,13 @@ MAX_ARCHIVE = 128 * 1024**2
 # the per-input archive cap as soon as a real pack is prepared. This bounds the output only.
 MAX_EXPORT = 1024 * 1024**2
 MAX_UNPACKED = 512 * 1024**2
-# Recollection3 resolves to 221 root and nested archives (53 roots, 168 nested).
-# The transform budget must be able to reach that inventory, otherwise a real pack is
-# rejected as "budget exceeded" before any metadata is reported.
-MAX_TRANSFORM_ARCHIVES = 256
-MAX_INSPECTION_ARCHIVES = 512
+# Recollection3 resolves to 221 root and nested archives (53 roots, 168 nested). A pack with a
+# UI-heavy Mod grows fast: TouchController alone carries 46 nested libraries, which pushed the
+# same pack to 267. The budget stays a bound on absurd input rather than a description of one
+# pack, so it scales with the root count instead of pinning a number a single Mod can exhaust.
+ARCHIVES_PER_ROOT = 8
+MAX_TRANSFORM_ARCHIVES = 320
+MAX_INSPECTION_ARCHIVES = 640
 # Entrypoint stages the Loader does not define are queried by a provider mod. When the
 # provider cannot exist in the closed-world client, no code can query the stage, so the
 # entry is unreachable and recorded instead of failing the archive.
@@ -46,7 +48,9 @@ OPTIONAL_PROVIDER_STAGES = {"modmenu": "modmenu", "jei_mod_plugin": "jei"}
 # time, so they implement that Mod's own API and compile against that Mod's jar. They must not be
 # compiled into a pack that does not contain the Mod: the compile would fail on the missing
 # package, and a class nothing references would still ship. Keyed by tool-relative path.
-RUNTIME_OVERLAY_MODS = {"mcfao/aot/GenericVertexSerializer.java": "sodium"}
+RUNTIME_OVERLAY_MODS = {"mcfao/aot/GenericVertexSerializer.java": "sodium",
+                        "mcfao/aot/IosTransport.java": "touchcontroller",
+                        "mcfao/aot/TouchHost.java": "touchcontroller"}
 # Packages the pinned engine owns. A Mod that ships its own copy would shadow the very
 # code the image is built against; Fabric API and language adapters live elsewhere.
 LOADER_PACKAGES = ("net/fabricmc/loader/", "net/fabricmc/mappingio/",
@@ -54,6 +58,100 @@ LOADER_PACKAGES = ("net/fabricmc/loader/", "net/fabricmc/mappingio/",
 # Identities the image supplies itself. A Mod that re-ships one of these must use the image
 # copy: its own classes are never merged.
 RESERVED_IDS = frozenset({"java", "minecraft", "fabricloader", "mixinextras"})
+
+# Nested libraries that only a build-time path needs. Fabric Language Kotlin ships
+# kotlin-reflect for its own KotlinAdapter, which decides whether an entrypoint is a Kotlin
+# object or a class to construct; that decision happens while the image is assembled and the
+# generated hook records it. Nothing in the image calls into the reflection implementation
+# afterwards, and its AnnotationConstructorCallerKt is the one class that would otherwise
+# trip the closed-world Proxy ban. Mods that use the stdlib interfaces (KClass, KProperty)
+# keep working: those live in kotlin-stdlib, not here.
+BUILD_TIME_NESTED_LIBRARIES = frozenset({"kotlin-reflect"})
+
+
+def version_tuple(value):
+    """Numeric parts of a Minecraft or Mod version, ignoring a pre-release suffix."""
+    match = re.match(r"\s*(\d+(?:\.\d+)*)", str(value))
+    if match is None:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def version_satisfies(declared, version):
+    """Fabric's version predicate for one declared entry.
+
+    The Loader accepts a bare version, an exact list, and the comparator forms mods use to
+    describe a range. A predicate this function cannot parse is treated as satisfied: the
+    filter exists to drop copies built for another line, and guessing "no" would silently
+    discard a Jar the Loader does load.
+    """
+    if not isinstance(declared, str) or not declared.strip():
+        return True
+    text = declared.strip()
+    target = version_tuple(version)
+    if target is None:
+        return True
+    for comparator in (">=", "<=", ">", "<", "="):
+        if text.startswith(comparator):
+            bound = version_tuple(text[len(comparator):])
+            if bound is None:
+                return True
+            if comparator == ">=":
+                return target >= bound
+            if comparator == "<=":
+                return target <= bound
+            if comparator == ">":
+                return target > bound
+            if comparator == "<":
+                return target < bound
+            return target == bound
+    if text.startswith("~"):
+        # A tilde range accepts the named line and later patch releases of it.
+        bound = version_tuple(text[1:])
+        return True if bound is None else target[:len(bound)] >= bound
+    if text.startswith("^"):
+        bound = version_tuple(text[1:])
+        if bound is None:
+            return True
+        return target >= bound and target[:len(bound) - 1] == bound[:len(bound) - 1]
+    if text.endswith((".x", ".*")):
+        prefix = version_tuple(text)
+        return True if prefix is None else target[:len(prefix)] == prefix
+    exact = version_tuple(text)
+    return True if exact is None else target == exact
+
+
+def nested_targets_version(metadata, version):
+    """Whether a nested Mod declares support for the Minecraft line being built.
+
+    Mods that bundle one Jar per Minecraft line rely on the Loader to pick the matching one,
+    and a Jar declaring a different line never loads. Static checks read every archive, so
+    without this filter a bundle such as TouchController's combine-1-21-10 would be validated
+    against 26.1.2 and fail on a namespace its own target never uses.
+    """
+    if not isinstance(metadata, dict) or not version:
+        return True
+    depends = metadata.get("depends")
+    declared = depends.get("minecraft") if isinstance(depends, dict) else None
+    if declared is None:
+        return True
+    if isinstance(declared, str):
+        return version_satisfies(declared, version)
+    if isinstance(declared, list):
+        return any(version_satisfies(entry, version) for entry in declared)
+    return True
+
+
+def nested_library_name(entry):
+    """The stable library name of a nested Jar path, without version or extension.
+
+    kotlin-reflect-2.3.21.jar and kotlin-reflect-2.4.0.jar are the same library, so a rule
+    keyed on the name keeps applying across dependency bumps.
+    """
+    stem = PurePosixPath(entry).name
+    if stem.endswith(".jar"):
+        stem = stem[:-4]
+    return re.sub(r"[-_]\d[\w.+-]*$", "", stem)
 
 
 def unique_keys(pairs):
@@ -160,10 +258,42 @@ def runtime_overlay_sources(roots, version=DEFAULT_VERSION):
     return compiled, skipped
 
 
-def inspect_archives(roots, work, *, metadata_only=False):
+def build_time_library_record(work):
+    """Read the build-time-only nested libraries an inspection left behind.
+
+    Kept beside the inventory instead of in its return value: the tuple list is the shape every
+    caller unpacks, and an inspection that skipped nothing has no record to read.
+    """
+    path = Path(work) / "build-time-libraries.json"
+    if not path.is_file():
+        return []
+    rows = json.loads(path.read_text())
+    return rows if isinstance(rows, list) else []
+
+
+def off_target_library_record(work):
+    """Nested Jars left out because they declare a different Minecraft line."""
+    path = Path(work) / "off-target-libraries.json"
+    if not path.is_file():
+        return []
+    rows = json.loads(path.read_text())
+    return rows if isinstance(rows, list) else []
+
+
+def inspect_archives(roots, work, *, metadata_only=False, version=None):
+    """Read every archive in the Fabric closure, in Loader order."""
+    work = Path(work)
+    work.mkdir(parents=True, exist_ok=True)
     inventory = []
     budget = MAX_UNPACKED
-    max_archives = MAX_INSPECTION_ARCHIVES if metadata_only else MAX_TRANSFORM_ARCHIVES
+    # The floor covers an ordinary pack; a pack with many roots may carry more nested
+    # libraries, so the ceiling grows with the root count instead of rejecting a large but
+    # legitimate inventory. The absolute cap keeps a pathological archive from expanding
+    # without bound.
+    absolute = MAX_INSPECTION_ARCHIVES if metadata_only else MAX_TRANSFORM_ARCHIVES
+    max_archives = min(absolute * 2, max(absolute, len(roots) * ARCHIVES_PER_ROOT))
+    build_time_libraries = []
+    off_target_libraries = []
 
     def inspect(path, origin, depth):
         nonlocal budget
@@ -196,13 +326,48 @@ def inspect_archives(roots, work, *, metadata_only=False):
                 name = nested["file"]
                 if name not in names or not name.endswith(".jar"):
                     raise ValueError(f"Missing nested Fabric JAR: {origin}!{name}")
+                if nested_library_name(name) in BUILD_TIME_NESTED_LIBRARIES:
+                    # The parent still declares it, so the entry is resolved by name here and
+                    # never unpacked: no class of it can reach the image or the classpath.
+                    build_time_libraries.append({
+                        "parent": origin.split("!", 1)[0],
+                        "archive": name,
+                        "library": nested_library_name(name),
+                        "reason": "build-time only: the Loader consults it while the image is "
+                                  "assembled and the generated entrypoint hook records the decision"})
+                    continue
                 child = work / f"nested-{len(inventory)}.jar"
                 with archive.open(name) as source, child.open("xb") as destination:
                     shutil.copyfileobj(source, destination)
+                with zipfile.ZipFile(child) as probe:
+                    try:
+                        nested_metadata = read_entry(probe, "fabric.mod.json")
+                    except (ValueError, KeyError):
+                        nested_metadata = None
+                if not nested_targets_version(nested_metadata, version):
+                    # The Loader would never load a Jar declaring another Minecraft line, so
+                    # its classes cannot reach the image either. Keeping it would validate a
+                    # Jar against a target it was never built for.
+                    off_target_libraries.append({
+                        "parent": origin.split("!", 1)[0], "archive": name,
+                        "id": nested_metadata.get("id") if isinstance(nested_metadata, dict) else None,
+                        "declared": (nested_metadata.get("depends") or {}).get("minecraft")
+                        if isinstance(nested_metadata, dict) else None,
+                        "reason": "declares another Minecraft line; the Loader never loads it here"})
+                    child.unlink()
+                    continue
                 inspect(child, f"{origin}!{name}", depth + 1)
 
     for root in roots:
         inspect(root, root.name, 0)
+    if build_time_libraries:
+        Path(work).mkdir(parents=True, exist_ok=True)
+        (Path(work) / "build-time-libraries.json").write_text(
+            json.dumps(build_time_libraries, indent=2) + "\n")
+    if off_target_libraries:
+        Path(work).mkdir(parents=True, exist_ok=True)
+        (Path(work) / "off-target-libraries.json").write_text(
+            json.dumps(off_target_libraries, indent=2) + "\n")
     return inventory
 
 
@@ -284,8 +449,16 @@ def transformation_checks(inventory, metadata, *, client_ids=None, nested=None, 
             if name == "META-INF/services/":
                 continue
             if (name.startswith(("mcfao/aot/", "org/spongepowered/", "com/llamalad7/", *LOADER_PACKAGES))
-                    or name.lower().endswith((".dylib", ".so", ".dll"))):
+                    or name.lower().endswith(".dylib")):
                 unsupported(f"Unsupported host configuration, class or native resource {name}")
+            if name.lower().endswith((".so", ".dll")):
+                # A Mod that ships one native per desktop or Android platform carries code this
+                # image can never load. Its Java side picks a platform at run time, so the
+                # copies for other systems are dead weight rather than a closed-world conflict.
+                skipped.append({"mod": parsed["id"], "stage": "native-resource",
+                                "provider": parsed["id"], "entrypoint": name,
+                                "reason": "desktop or Android native library; not loaded on iOS"})
+                continue
             if name.startswith(("assets/", "data/")) and re.search(r"[\\\x00-\x1f]", name):
                 unsupported(f"Unsupported resource path {name}")
         with zipfile.ZipFile(path) as archive:
@@ -601,7 +774,9 @@ def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer
     # copyfile may still create exFAT sidecars; Knot scans the directory itself.
     from mod_file_policy import clean_staged_metadata
     clean_staged_metadata(work / 'game/mods')
-    inventory = inspect_archives(roots, work, metadata_only=not audited)
+    inventory = inspect_archives(roots, work, metadata_only=not audited, version=profile.version)
+    build_time_libraries = build_time_library_record(work)
+    off_target_libraries = off_target_library_record(work)
     classpath = knot_classpath(
         engine, libraries, json.loads((ROOT / "compiler/fabric.lock.json").read_text()))
     classes = work / "classes"
@@ -615,7 +790,11 @@ def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer
     runtime_classes = None
     if runtime_sources and not mapping_preparation:
         runtime_classes = work / "runtime-classes"
-        compile_java(home, [*classpath, client, *mod_files(work / "game/mods")],
+        # A runtime replacement may implement a Mod's own API, and a Mod that keeps its classes in
+        # a nested Jar exposes them only there. The nested roots are already unpacked under work,
+        # so they join the compile classpath alongside the outer Jars.
+        nested = sorted(p for p in work.glob("nested-*.jar") if p.is_file())
+        compile_java(home, [*classpath, client, *mod_files(work / "game/mods"), *nested],
                      runtime_sources, runtime_classes, output / "compile-runtime")
     if loader is None:
         driver = prepared / "driver.jar"
@@ -686,7 +865,8 @@ def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer
         roots = mod_files(work / "game/mods")
         remapped_inventory = work / "remapped-inventory"
         remapped_inventory.mkdir()
-        inventory = inspect_archives(roots, remapped_inventory)
+        inventory = inspect_archives(roots, remapped_inventory, version=profile.version)
+        build_time_libraries = build_time_library_record(remapped_inventory)
         # Recompile first-party runtime replacements against the remapped Mod APIs.
         runtime_sources, overlay_skipped = runtime_overlay_sources(roots, profile.version)
         if runtime_sources:
@@ -737,6 +917,14 @@ def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer
                   for adapter in (raw.get("languageAdapters") or {})})
     if skipped:
         record["optionalEntrypointsSkipped"] = skipped
+    if build_time_libraries:
+        # A declared nested dependency with no classes in the image is a deliberate decision,
+        # so the report names it rather than leaving a gap a reader has to explain.
+        record["buildTimeNestedLibraries"] = build_time_libraries
+    if off_target_libraries:
+        # Bundles that ship one Jar per Minecraft line are filtered the same way the Loader
+        # filters them, so the report shows which copies were never candidates.
+        record["offTargetNestedLibraries"] = off_target_libraries
     request = work / "ids.txt"
     wanted = sorted({row["id"] for row in metadata if row["client"] and row["id"] not in RESERVED_IDS})
     request.write_text("\n".join(wanted) + "\n")
