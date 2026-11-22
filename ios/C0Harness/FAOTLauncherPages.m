@@ -291,6 +291,8 @@ static BOOL FAOTValidOfflineName(NSString *name) {
 @property (nonatomic, strong) UIStackView *layoutList;
 @property (nonatomic, strong) UISlider *scaleSlider;
 @property (nonatomic, strong) UILabel *scaleCaption;
+@property (nonatomic, strong) UISlider *renderScaleSlider;
+@property (nonatomic, strong) UILabel *renderScaleCaption;
 @property (nonatomic, strong) UILabel *memoryCaption;
 @property (nonatomic, strong) UISegmentedControl *memoryPicker;
 @property (nonatomic, strong) UILabel *retentionCaption;
@@ -358,6 +360,23 @@ static BOOL FAOTValidOfflineName(NSString *name) {
                                                               layoutActions, scaleTitle, self.scaleSlider,
                                                               self.scaleCaption, layoutHint], 10), 14)];
 
+    // Render scale is a launch-time setting: the GL41 surface reads it once and
+    // builds its framebuffer at that fraction of the device resolution.
+    UISlider *renderScale = [[UISlider alloc] initWithFrame:CGRectZero];
+    self.renderScaleSlider = renderScale;
+    renderScale.minimumValue = 0.1f;
+    renderScale.maximumValue = 1.0f;
+    renderScale.continuous = YES;
+    renderScale.minimumTrackTintColor = FAOTAccentColor();
+    [renderScale addTarget:self action:@selector(renderScaleChanged:)
+          forControlEvents:UIControlEventValueChanged];
+    self.renderScaleCaption = FAOTMakeLabel(@"", 11, UIFontWeightRegular, FAOTSecondaryTextColor());
+    UILabel *renderScaleTitle = FAOTMakeLabel(@"渲染分辨率", 12, UIFontWeightMedium, FAOTMutedTextColor());
+    UILabel *renderScaleHint = FAOTMakeLabel(@"降低渲染分辨率可减轻 GPU 压力；下次进入游戏生效。",
+                                             11, UIFontWeightRegular, FAOTMutedTextColor());
+    [stack addArrangedSubview:FAOTPaddedCard(FAOTMakeStack(@[renderScaleTitle, renderScale,
+                                                              self.renderScaleCaption, renderScaleHint], 8), 14)];
+
     self.memoryCaption = FAOTMakeLabel(FAOTLauncherSettings.shared.deviceMemoryCaption, 12, UIFontWeightRegular, FAOTSecondaryTextColor());
     NSMutableArray *memoryItems = [NSMutableArray array];
     for (NSNumber *value in FAOTLauncherSettings.shared.memoryOptions) [memoryItems addObject:[NSString stringWithFormat:@"%@G", value]];
@@ -415,6 +434,9 @@ static BOOL FAOTValidOfflineName(NSString *name) {
     self.scaleSlider.value = (float)FAOTControlButtonScale();
     self.scaleCaption.text = [NSString stringWithFormat:@"%.0f%%（所有布局通用，进入游戏生效）",
                               FAOTControlButtonScale()];
+    self.renderScaleSlider.value = (float)settings.renderScale;
+    self.renderScaleCaption.text = [NSString stringWithFormat:@"%.0f%%（下次进入游戏生效）",
+                                    settings.renderScale * 100.0];
     NSInteger memory = settings.memoryGiB;
     NSArray<NSNumber *> *options = settings.memoryOptions;
     NSUInteger memoryIndex = 0;
@@ -487,6 +509,12 @@ static BOOL FAOTValidOfflineName(NSString *name) {
     double value = round((double)slider.value / 5.0) * 5.0;
     [NSUserDefaults.standardUserDefaults setDouble:value forKey:@"FAOTControlButtonScale"];
     self.scaleCaption.text = [NSString stringWithFormat:@"%.0f%%（所有布局通用，进入游戏生效）", value];
+}
+
+- (void)renderScaleChanged:(UISlider *)slider {
+    double value = round((double)slider.value * 10.0) / 10.0;
+    FAOTLauncherSettings.shared.renderScale = value;
+    self.renderScaleCaption.text = [NSString stringWithFormat:@"%.0f%%（下次进入游戏生效）", value * 100.0];
 }
 
 #pragma mark - Layout management

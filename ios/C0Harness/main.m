@@ -627,6 +627,8 @@ static void FAOTProbeReservations(FILE *logFile) {
         [defaults setInteger:memoryGiB forKey:@"reservedGiB"];  // the harness picker reads this
         [defaults setObject:layoutName forKey:@"FAOTControlLayout"];
         [defaults setObject:languageCode forKey:@"FAOTLanguage"];
+        NSString *renderScale = [NSString stringWithFormat:@"%.1f", FAOTLauncherSettings.shared.renderScale];
+        setenv("FAOT_GL41_SCALE", renderScale.UTF8String, 1);
         FAOTHarnessController *harness = [FAOTHarnessController new];
         // The runtime starts on its own: the GL41 surface creates and focuses a
         // dedicated window, so presenting the harness would only flash a console
