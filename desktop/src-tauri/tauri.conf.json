@@ -39,6 +39,7 @@
     "shortDescription": "NCL Builder 本地 IPA 构建工作台（实验版）",
     "resources": {
       "../../tools/preflight.py": "tools/preflight.py",
+      "../../tools/game_versions.py": "tools/game_versions.py",
       "icon-build/Assets.car": "Assets.car",
       "icon-build/NCB.icns": "NCB.icns",
       "../../tools/mod_file_policy.py": "tools/mod_file_policy.py",

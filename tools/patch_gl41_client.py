@@ -14,6 +14,7 @@ from bootstrap_toolchain import sha256
 from build_method_splitter import java_home
 from capture import ROOT, capture, redact_log
 from graphics_common import register_tree
+from game_versions import DEFAULT_VERSION, SUPPORTED_VERSIONS
 
 
 def report_failure(label, log, result):
@@ -33,6 +34,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--client", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--version", choices=SUPPORTED_VERSIONS, default=DEFAULT_VERSION)
     parser.add_argument("--graalvm-home", type=Path)
     parser.add_argument("--asm-jars", type=Path, nargs=2, metavar=("ASM_CORE", "ASM_TREE"))
     args = parser.parse_args(argv)
@@ -48,6 +50,8 @@ def main(argv=None):
     frame_pacing = ROOT / "compiler/gl41/tools/fabricaot/gl41/FramePacing.java"
     sources = [source, frame_pacing, shared / "metal/InjectBackend.java",
                shared / "diag/PlayDiagnostics.java"]
+    if args.version == "1.21.1":
+        sources.append(source.with_name("PatchDevice1211.java"))
     classpath = os.pathsep.join(map(str, asm))
     compiled = capture([str(home / "bin/javac"), "--release", "25", "-proc:none", "-cp", classpath,
                         "-d", str(classes), *map(str, sources)], out / "compile", 120)
@@ -55,10 +59,12 @@ def main(argv=None):
         return report_failure("GL41 patcher compilation failed", out / "compile", compiled)
     target = out / "client.jar"
     run = capture([str(home / "bin/java"), "-cp", str(classes) + os.pathsep + classpath,
-                   "fabricaot.gl41.PatchDevice", str(client), str(target), str(classes)], out / "transform", 120)
+                   "fabricaot.gl41." + ("PatchDevice1211" if args.version == "1.21.1" else "PatchDevice"),
+                   str(client), str(target), str(classes)], out / "transform", 120)
     if run["exitCode"] or run["timedOut"]:
         return report_failure("GL41 client patch failed", out / "transform", run)
-    if "GL41_DIRECT_STATE_DISABLED" not in (out / "transform/stdout.log").read_text().splitlines():
+    marker = "GL41_1211_PROFILE_APPLIED" if args.version == "1.21.1" else "GL41_DIRECT_STATE_DISABLED"
+    if marker not in (out / "transform/stdout.log").read_text().splitlines():
         return report_failure("GL41 client patch did not report success", out / "transform", run)
     with zipfile.ZipFile(client) as before, zipfile.ZipFile(target) as after:
         names_before = before.namelist()
@@ -81,11 +87,21 @@ def main(argv=None):
                     "net/minecraft/client/renderer/DynamicUniforms.class",
                     "net/minecraft/network/Connection.class"]
         iris_entity = "net/irisshaders/iris/pipeline/transform/transformer/EntityPatcher.class"
-        if iris_entity in names_before:
+        if args.version == "1.21.1":
+            expected = ["com/mojang/blaze3d/platform/GLX.class", "net/minecraft/SystemReport.class",
+                        "net/minecraft/client/main/Main.class",
+                        "net/minecraft/util/profiling/jfr/JvmProfiler.class",
+                        "net/minecraft/client/Minecraft.class",
+                        "net/minecraft/client/multiplayer/ClientPacketListener.class",
+                        "net/minecraft/client/multiplayer/ClientChunkCache.class",
+                        "net/minecraft/network/Connection.class"]
+        elif iris_entity in names_before:
             expected.append(iris_entity)
         if sorted(changed_classes) != sorted(expected):
             raise ValueError("Unexpected patched entries: " + repr(changed))
-    result = {"status": "GL41_CLIENT_PATCHED", "client": str(client), "clientSHA256": sha256(client),
+    result = {"status": "GL41_CLIENT_PATCHED", "minecraftVersion": args.version,
+              "sourcesSHA256": {str(p.relative_to(ROOT)): sha256(p) for p in sources},
+              "client": str(client), "clientSHA256": sha256(client),
               "outputJar": str(target), "outputJarSHA256": sha256(target),
               "changedEntries": changed, "directStateAccess": "disabled for the 4.1 OSMesa surface",
               "worldJoin": "preserve vanilla readiness and chat signature checks; trace client loading",
@@ -94,6 +110,12 @@ def main(argv=None):
               "irisEntityAttribute": ("unsigned USHORT4 input with exact signed-ID conversion"
                                       if iris_entity in names_before else "Iris entity patcher absent"),
               "scope": "build-time bytecode adaptation; no game execution"}
+    if args.version == "1.21.1":
+        result.update(directStateAccess="vanilla 1.21.1 legacy OpenGL path",
+                      flightRecorder="Minecraft NoOpProfiler; iOS AOT has no JFR recorder",
+                      worldJoin="short-circuit absent chat sessions and disabled secure-chat flags; preserve signature validation; trace packet handoffs and chunk decoding",
+                      uniformBuffers="vanilla 1.21.1 allocation",
+                      irisEntityAttribute="version-specific Iris patch not applied")
     (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     register_tree(out, [sys.executable, "-B", str(Path(__file__).resolve()),
                         *(sys.argv[1:] if argv is None else argv)])

@@ -122,7 +122,7 @@ class StageTests(unittest.TestCase):
                         raise RuntimeError("stop at AOT")
                     return self.root
 
-                with (patch("mcfao.inputs", return_value=({"filesSHA256": {}, "renderer": "gl41"}, self.root / "client.jar", [])),
+                with (patch("mcfao.inputs", return_value=({"filesSHA256": {}, "renderer": "gl41", "version": "26.1.2"}, self.root / "client.jar", [])),
                       patch("mcfao.loader_client", return_value=(self.root / "client.jar", None)),
                       patch("mcfao.cache_path", return_value=self.root / "cache") as cache_path,
                       patch.dict("os.environ", {"MCFAO_OPT_LEVEL": "-O1"}),
@@ -552,8 +552,8 @@ class RuntimeOverlayTests(unittest.TestCase):
         roots = [self.jar("other.jar", "othermod")]
         compiled, skipped = runtime_overlay_sources(roots)
         self.assertEqual([p.name for p in compiled],
-                         ["ClasspathPackResources.java", "ModCatalog.java", "ModFiles.java",
-                          "OptionalJvmCapabilities.java", "TextureImage.java"])
+                         ["ClasspathPackResources.java", "MappingTable.java", "ModCatalog.java",
+                          "ModFiles.java", "OptionalJvmCapabilities.java", "TextureImage.java", "TexturePixels.java"])
         self.assertEqual(skipped, [{"source": "mcfao/aot/GenericVertexSerializer.java",
                                     "requiresMod": "sodium"}])
 
@@ -561,8 +561,9 @@ class RuntimeOverlayTests(unittest.TestCase):
         roots = [self.jar("sodium.jar", "sodium")]
         compiled, skipped = runtime_overlay_sources(roots)
         self.assertEqual([p.name for p in compiled],
-                         ["ClasspathPackResources.java", "GenericVertexSerializer.java", "ModCatalog.java",
-                          "ModFiles.java", "OptionalJvmCapabilities.java", "TextureImage.java"])
+                         ["ClasspathPackResources.java", "GenericVertexSerializer.java", "MappingTable.java",
+                          "ModCatalog.java", "ModFiles.java", "OptionalJvmCapabilities.java",
+                          "TextureImage.java", "TexturePixels.java"])
         self.assertEqual(skipped, [])
 
     def test_root_mod_ids_reads_every_root_jar(self):

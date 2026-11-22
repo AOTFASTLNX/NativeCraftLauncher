@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Offline, fail-closed *metadata preflight* for Native Craft Launcher Minecraft 26.1.2.
+"""Offline, fail-closed *metadata preflight* for Native Craft Launcher Minecraft packs.
 
 This deliberately does not download files, execute Java, unpack modpacks, resolve
 Fabric dependencies or certify that a mod can run on iOS/AOT. Treat all inputs
 as untrusted, including local Prism directories and nested JARs.
+
+Supported Minecraft versions come from game_versions.py. The pack's declared
+version is recorded as minecraft_version and resolved to target_minecraft; a
+missing, ambiguous or unsupported declaration is an error, never a silent default.
 """
 from __future__ import annotations
 
@@ -22,8 +26,9 @@ import zlib
 from pathlib import Path
 from urllib.parse import urlsplit
 from mod_file_policy import is_metadata, content_paths
+from game_versions import DEFAULT_VERSION, SUPPORTED_VERSIONS, get_profile
 
-TARGET_MINECRAFT = "26.1.2"
+TARGET_MINECRAFT = DEFAULT_VERSION
 MAX_MANIFEST = 2 * 1024 * 1024
 MAX_MOD_METADATA = 512 * 1024
 MAX_EMBEDDED_JAR = 96 * 1024 * 1024
@@ -138,6 +143,41 @@ def resource_inventory(path, result):
 
 def finding(severity: str, code: str, message: str) -> dict:
     return {"severity": severity, "code": code, "message": message}
+
+
+def resolve_minecraft_version(declared: object, findings: list, origin: str):
+    """Resolve a pack-declared Minecraft version to a supported profile.
+
+    The declared value is whatever the pack supplied. Missing, non-text,
+    list-valued (ambiguous) and unsupported versions each produce an error
+    finding and return ``None``; the caller must not substitute the default
+    version, so an unknown pack can never be built as another version.
+    """
+    if declared is None:
+        findings.append(finding("error", "MISSING_MC_VERSION",
+                                f"{origin} does not declare a Minecraft version"))
+        return None
+    if isinstance(declared, (list, tuple, dict)):
+        findings.append(finding("error", "AMBIGUOUS_MC_VERSION",
+                                f"{origin} declares multiple Minecraft versions: {declared!r}"))
+        return None
+    if not isinstance(declared, str):
+        findings.append(finding("error", "AMBIGUOUS_MC_VERSION",
+                                f"{origin} declares a non-text Minecraft version: {declared!r}"))
+        return None
+    if not declared:
+        findings.append(finding("error", "MISSING_MC_VERSION",
+                                f"{origin} declares an empty Minecraft version"))
+        return None
+    try:
+        # Exact match only: a padded or prefixed string is a different
+        # declaration and must fail rather than be normalized into support.
+        return get_profile(declared)
+    except ValueError:
+        findings.append(finding("error", "WRONG_MC_VERSION",
+                                f"{origin} declares unsupported Minecraft {declared!r}; "
+                                f"supported: {', '.join(SUPPORTED_VERSIONS)}"))
+        return None
 
 
 def safe_archive_path(raw: object) -> bool:
@@ -391,7 +431,11 @@ def scan_pack(path: Path) -> dict:
     mods: list[dict] = []
     inventory: list[dict] = []
     result = {
-        "source": str(path), "target_minecraft": TARGET_MINECRAFT,
+        # target_minecraft is filled only from a recognized declaration. It stays
+        # an empty string (never the default version) when the declaration is
+        # missing, ambiguous or unsupported, so callers cannot mistake an
+        # unresolved pack for a 26.1.2 one. minecraft_version keeps the raw text.
+        "source": str(path), "target_minecraft": "", "minecraft_version": None,
         "status": "STATIC_PREFLIGHT_ONLY", "source_type": "unknown",
         "mods": mods, "mod_inventory": inventory, "findings": findings, "aot_ios_verified": False,
         "fatal": True,
@@ -421,8 +465,10 @@ def scan_pack(path: Path) -> dict:
                     raise ValueError("Manifest dependencies must be object")
                 result["pack_name"] = manifest.get("name")
                 result["pack_version"] = manifest.get("versionId")
-                if deps.get("minecraft") != TARGET_MINECRAFT:
-                    findings.append(finding("error", "WRONG_MC_VERSION", f"Expected {TARGET_MINECRAFT}, got {deps.get('minecraft')!r}"))
+                result["minecraft_version"] = deps.get("minecraft")
+                profile = resolve_minecraft_version(deps.get("minecraft"), findings, "modrinth.index.json")
+                if profile is not None:
+                    result["target_minecraft"] = profile.version
                 if not isinstance(deps.get("fabric-loader"), str) or not deps["fabric-loader"]:
                     findings.append(finding("error", "NOT_FABRIC", "No Fabric loader declared"))
                 else:
@@ -477,8 +523,15 @@ def scan_pack(path: Path) -> dict:
                 if not isinstance(manifest, dict) or not isinstance(manifest.get("components"), list):
                     raise ValueError("Prism manifest missing components list")
                 components = {str(item.get("uid")): str(item.get("version")) for item in manifest["components"] if isinstance(item, dict)}
-                if components.get("net.minecraft") != TARGET_MINECRAFT:
-                    findings.append(finding("error", "WRONG_MC_VERSION", f"Expected {TARGET_MINECRAFT}, got {components.get('net.minecraft')!r}"))
+                declared = [item.get("version") for item in manifest["components"]
+                            if isinstance(item, dict) and str(item.get("uid")) == "net.minecraft"]
+                # A Prism file with two net.minecraft rows is ambiguous; hand the
+                # list to the resolver so it fails instead of picking one row.
+                declaration = declared[0] if len(declared) == 1 else (declared or None)
+                result["minecraft_version"] = declaration
+                profile = resolve_minecraft_version(declaration, findings, "mmc-pack.json")
+                if profile is not None:
+                    result["target_minecraft"] = profile.version
                 loader = components.get("net.fabricmc.fabric-loader")
                 if not loader or loader == "None":
                     findings.append(finding("error", "NOT_FABRIC", "Prism instance has no Fabric loader"))
@@ -531,7 +584,7 @@ def scan_pack(path: Path) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Offline NCL 26.1.2 metadata preflight (not AOT compatibility certification)")
+    parser = argparse.ArgumentParser(description="Offline NCL metadata preflight for supported Minecraft versions (not AOT compatibility certification)")
     parser.add_argument("path", type=Path)
     args = parser.parse_args()
     report = scan_pack(args.path)

@@ -187,7 +187,11 @@ static void FAOTInstallCrashHandlers(int fd) {
 @property(nonatomic, assign) BOOL started;
 @property(nonatomic, assign) BOOL finished;
 @property(nonatomic, strong) NSFileHandle *logHandle;
+/// Called once when the runtime stops. The launcher must leave its 加载中 state even
+/// though this controller is never presented on screen.
+@property(nonatomic, copy) void (^onFinish)(BOOL succeeded, NSString *summary, NSString *logPath);
 - (void)startInBackground;
+- (void)finishWithStatus:(NSString *)text succeeded:(BOOL)succeeded logPath:(NSString *)path;
 @end
 
 @implementation FAOTHarnessController
@@ -254,8 +258,8 @@ static void FAOTInstallCrashHandlers(int fd) {
 
 - (void)refreshStatus {
     self.status.text = [NSString stringWithFormat:
-        @"C0 · Minecraft 26.1.2 AOT 宿主\n设备 %@ · %@ · 可用内存 %@\n物理内存 %@",
-        UIDevice.currentDevice.systemName, UIDevice.currentDevice.systemVersion,
+        @"C0 · Minecraft %@ AOT 宿主\n设备 %@ · %@ · 可用内存 %@\n物理内存 %@",
+        FAOTCurrentMinecraftVersion(), UIDevice.currentDevice.systemName, UIDevice.currentDevice.systemVersion,
         [NSString stringWithFormat:@"%.1f GiB", os_proc_available_memory() / 1073741824.0],
         FAOTPhysicalMemoryText()];
 }
@@ -306,8 +310,8 @@ static void FAOTInstallCrashHandlers(int fd) {
     int logFD = faot_open_append_log(logPath.fileSystemRepresentation);
     if (logFD < 0) {
         NSString *message = [NSString stringWithFormat:@"无法创建本次日志：%s", strerror(errno)];
-        if (self.isViewLoaded) self.status.text = message;
-        else fprintf(stderr, "[FAOT] %s\n", message.UTF8String);
+        fprintf(stderr, "[FAOT] %s\n", message.UTF8String);
+        [self finishWithStatus:message logPath:logPath];
         return;
     }
     [FAOTLogStore pruneToRetention:FAOTLauncherSettings.shared.logRetention];
@@ -509,10 +513,12 @@ static void FAOTProbeReservations(FILE *logFile) {
             [NSString stringWithFormat:@"-Xmx%ldm", (long)(FAOTSelectedHeapGiB() * 1024)],
             [NSString stringWithFormat:@"-Dorg.lwjgl.librarypath=%@", frameworks],
             @"-Dorg.lwjgl.system.allocator=system",
+            // Log4j 2.22 enables JMX by default; iOS has no JVM management natives.
+            @"-Dlog4j2.disable.jmx=true",
             [NSString stringWithFormat:@"-Duser.language=%@", [language substringToIndex:2]],
             [NSString stringWithFormat:@"-Duser.country=%@", [language substringFromIndex:3].uppercaseString],
-            @"--username", accountName, @"--version", @"26.1.2",
-            @"--gameDir", game, @"--assetsDir", assets, @"--assetIndex", @"30",
+            @"--username", accountName, @"--version", FAOTCurrentMinecraftVersion(),
+            @"--gameDir", game, @"--assetsDir", assets, @"--assetIndex", FAOTCurrentAssetIndex(),
             @"--uuid", accountUUID,
             @"--accessToken", accessToken, @"--userType", userType, @"--versionType", @"release",
         ]];
@@ -580,18 +586,30 @@ static void FAOTProbeReservations(FILE *logFile) {
             emit([NSString stringWithFormat:@"[FAOT] graal_tear_down_isolate=%d", teardown]);
         }
         if (logFile) fclose(logFile);
+        // Forward the runtime exit code and its saved log to the launcher.
         [self finishWithStatus:[NSString stringWithFormat:@"Java 入口已返回 %d", result]
-                       logPath:logPath];
+                      succeeded:(result == 0)
+                        logPath:logPath];
     }
 }
 
 - (void)finishWithStatus:(NSString *)text logPath:(NSString *)path {
+    [self finishWithStatus:text succeeded:NO logPath:path];
+}
+
+- (void)finishWithStatus:(NSString *)text succeeded:(BOOL)succeeded logPath:(NSString *)path {
     FILE *f = fopen(path.fileSystemRepresentation, "a");
     if (f) {
         fprintf(f, "\n[FAOT] %s\n", text.UTF8String);
         fclose(f);
     }
     self.finished = YES;
+    // Notify the launcher even when the harness has no visible console.
+    void (^finish)(BOOL, NSString *, NSString *) = self.onFinish;
+    if (finish) {
+        finish(succeeded, text, path);
+        self.onFinish = nil;
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
         // Nothing to show when the harness ran headless; the log file is the
         // record in that case.
@@ -620,6 +638,7 @@ static void FAOTProbeReservations(FILE *logFile) {
     if (![scene isKindOfClass:UIWindowScene.class]) return;
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
     FAOTLauncherViewController *launcher = [FAOTLauncherViewController new];
+    __weak FAOTLauncherViewController *weakLauncher = launcher;
     launcher.onLaunch = ^(NSString *playerName, NSInteger memoryGiB, NSString *layoutName, NSString *languageCode) {
         NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
         [defaults setObject:playerName forKey:@"FAOTPlayerName"];
@@ -634,6 +653,13 @@ static void FAOTProbeReservations(FILE *logFile) {
         // dedicated window, so presenting the harness would only flash a console
         // page over the launcher first. The launcher keeps its loading button
         // until the game window takes over, and the log stays on disk.
+        // When the runtime stops, hand the result back so the launcher can leave
+        // 加载中 and show the exit plus a log entry point.
+        harness.onFinish = ^(BOOL succeeded, NSString *summary, NSString *logPath) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakLauncher runtimeFinishedSuccess:succeeded summary:summary logPath:logPath];
+            });
+        };
         [harness startInBackground];
     };
     self.window.rootViewController = launcher;

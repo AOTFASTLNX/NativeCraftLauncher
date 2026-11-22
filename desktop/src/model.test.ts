@@ -18,6 +18,16 @@ const report = {
 };
 
 describe("preflight report boundary", () => {
+  it("accepts both build lines and rejects unknown or missing versions", () => {
+    expect(parseReport({ ...report, target_minecraft: "1.21.1" }).target_minecraft).toBe("1.21.1");
+    for (const version of [undefined, null, "1.21", " 1.21.1"])
+      expect(() => parseReport({ ...report, target_minecraft: version })).toThrow();
+  });
+  it("exports the selected version without silently substituting another one", () => {
+    const settings = { ...DEFAULT_SETTINGS, workspace: "/repo", config: "/config", output: "/out" };
+    expect(prepareCommand(settings, "/mods", false, "1.21.1")).toContain("1.21.1");
+    expect(() => prepareCommand(settings, "/mods", false, "1.20.1")).toThrow("不支持 Minecraft");
+  });
   it("rejects resource path traversal, duplicate IDs, and false availability", () => {
     const resource = {
       id: "local:mods/one.jar",

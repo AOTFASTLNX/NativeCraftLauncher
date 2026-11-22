@@ -23,7 +23,7 @@ from urllib.parse import urljoin, urlsplit
 from uuid import uuid4
 import zipfile
 from preflight import scan_pack, validate_zip_members, read_json_limited, MAX_MANIFEST, resource_unit, tls_context
-from mcfao import instance_files
+from mcfao import instance_files, load_config
 from bootstrap_toolchain import sha256
 from capture import redact_log
 from mod_download_cache import ModDownloadCache, is_mod_jar
@@ -39,11 +39,15 @@ import native_dependencies
 import app_icon
 from test_version import test_version
 from loader_selection import select as select_loader, verified as verified_loaders
+from game_versions import DEFAULT_VERSION, SUPPORTED_VERSIONS, get_profile
 
 ROOT = Path(__file__).resolve().parents[1]
 KEYS = ('prepared', 'caps', 'bootstrapRuntime', 'splitter', 'versionMetadata', 'assets',
         'glfw', 'lwjgl', 'gl41', 'openal', 'lwjglOpengl', 'b1Evidence')
 OPTIONAL_KEYS = {'openjdkSource', 'graalSource', 'metal', 'shaders'}
+# A config may carry per-version overrides beside the root keys. Discovery has to
+# accept the document, and saving must write the object back untouched.
+PROFILE_KEY = 'versionProfiles'
 PUBLIC_ACTIONS = ('bootstrap', 'check', 'dependencies', 'start', 'status', 'cancel', 'history', 'retry',
                   'resolve-exclusions', 'save-config', 'icon-preview', 'storage-plan',
                   'storage-clean', 'storage-settings', 'storage-change-plan', 'storage-change-apply', 'reset-storage', 'save-storage', 'setup-start', 'setup-status',
@@ -66,6 +70,22 @@ def resolve(value, base=ROOT):
     if not isinstance(value, str) or not value.strip() or len(value) > 4096 or any(ord(c) in (0, 10, 13) for c in value):
         raise ValueError('请选择有效路径')
     return (base / Path(value).expanduser()).resolve()
+
+def minecraft_version(value):
+    """Resolve the requested Minecraft line; an omitted field keeps the default.
+
+    The GUI always sends the version it recognized in the source report, so a
+    blank or unknown value is a client bug rather than a reason to fall back to
+    26.1.2. Only a genuinely absent key keeps backwards compatibility with jobs
+    recorded before multi-version support existed.
+    """
+    if value is None: return DEFAULT_VERSION
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError('Minecraft 版本无效，请重新选择整合包')
+    return get_profile(value).version
+
+def version_label(version):
+    return minecraft_version(version)
 
 def workspace_path(value):
     p = resolve(value)
@@ -133,25 +153,85 @@ def history(workspace):
         except (OSError, ValueError, KeyError): pass
     return jobs
 
-def config_summary(value):
+def config_summary(value, version=DEFAULT_VERSION):
+    """Validate a config for the selected line and return its resolved inputs.
+
+    The document may carry a versionProfiles object beside the root keys; only
+    the selected version's overrides are merged, and a non-default version must
+    declare its own entry instead of reusing the 26.1.2 inputs.
+    """
     config = resolve(value)
     data = read_json(config)
-    if not isinstance(data, dict) or not set(KEYS) <= data.keys() or data.keys() - set(KEYS) - OPTIONAL_KEYS:
+    if not isinstance(data, dict) or not set(KEYS) <= data.keys() or data.keys() - set(KEYS) - OPTIONAL_KEYS - {PROFILE_KEY}:
         raise ValueError('构建配置字段不完整，请选择 mcfao 配置或补全高级配置')
-    paths = {k: resolve(v, config.parent) for k, v in data.items()}
+    try:
+        paths = load_config(config, 'gl41', minecraft_version(version))
+    except ValueError as exc:
+        raise ValueError('构建配置与所选 Minecraft 版本不一致：' + str(exc)) from exc
     missing = [k + ': ' + str(v) for k, v in paths.items() if not v.exists()]
     if missing: raise ValueError('构建输入不存在：\n' + '\n'.join(missing))
     return config, paths
 
-def bootstrap(workspace):
+def config_declares(path, version):
+    """Whether a config document can serve one version, without requiring its files.
+
+    Discovery must accept a saved configuration whose inputs live on a volume
+    that is currently offline, so a missing input is not a reason to skip it;
+    an invalid schema or a missing versionProfiles entry is.
+    """
+    try:
+        load_config(path, 'gl41', version)
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError, KeyError):
+        return False
+    return True
+
+def setup_for_version(setup, version):
+    """A finished environment only counts as ready for the version it prepared.
+
+    first_run keeps one status record, so a ready 26.1.2 environment must not
+    make a 1.21.1 build look prepared. A mismatch is reported as stale so the
+    GUI offers preparation again for the selected line.
+    """
+    if not isinstance(setup, dict): return setup
+    prepared = setup.get('minecraftVersion')
+    prepared = DEFAULT_VERSION if prepared is None else minecraft_version(prepared)
+    if prepared == version: return {**setup, 'preparedVersion': prepared}
+    if setup.get('state') == 'ready':
+        return {**setup, 'state': 'stale', 'preparedVersion': prepared,
+                'message': f'已准备的构建环境属于 Minecraft {prepared}，请为 {version} 重新准备'}
+    return {**setup, 'preparedVersion': prepared, 'versionMismatch': True}
+
+def selection_path(workspace):
+    return storage_paths(workspace)['jobs'] / 'setup/selection.json'
+
+def selected_version(workspace):
+    """The line the GUI last asked the workbench to work on."""
+    try:
+        return minecraft_version(read_json(selection_path(workspace)).get('minecraftVersion'))
+    except (OSError, ValueError, KeyError):
+        return None
+
+def record_selection(workspace, version):
+    path = selection_path(workspace)
+    try:
+        if read_json(path).get('minecraftVersion') == version: return
+    except (OSError, ValueError):
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(path, {'minecraftVersion': version})
+
+def bootstrap(workspace, version=DEFAULT_VERSION):
+    version = minecraft_version(version)
     from first_run import status as setup_status
     try:
-        setup = setup_status()
+        setup = setup_for_version(setup_status(), version)
     except (OSError, ValueError):
         setup = dict(state='failed', message='无法读取环境准备状态，请检查存储位置后重试')
-    config = next((p for p in (workspace / 'artifacts/integration-20261115/config-gl41.json', workspace / 'artifacts/mcfao-gl41.json', workspace / 'mcfao.local.json') if p.is_file()), None)
+    config = next((p for p in (workspace / 'artifacts/integration-20261115/config-gl41.json', workspace / 'artifacts/mcfao-gl41.json', workspace / 'mcfao.local.json') if p.is_file() and config_declares(p, version)), None)
     generated = setup.get('config')
-    if generated and Path(generated).is_file():
+    if generated and Path(generated).is_file() and config_declares(Path(generated), version):
         config = Path(generated)
     # A packaged source tree deliberately omits artifacts/, so a workbench
     # update must still find the configuration the user saved previously.
@@ -168,15 +248,17 @@ def bootstrap(workspace):
         candidates = sorted((p for p in folder.glob('*.json') if not is_metadata(p.name)),
                             key=recent, reverse=True)[:50] if folder and folder.is_dir() else []
         for candidate in candidates:
-            try: values = read_json(candidate)
-            except (OSError, ValueError): continue
-            if isinstance(values, dict) and set(KEYS) <= values.keys() and not values.keys() - set(KEYS) - OPTIONAL_KEYS:
+            if config_declares(candidate, version):
                 config = candidate
                 break
     fields = {}
     if config:
         try: fields = read_json(config)
         except (OSError, ValueError): pass
+    try:
+        record_selection(workspace, version)
+    except (OSError, ValueError):
+        pass
     bundled = (workspace / 'bundle-manifest.json').is_file()
     lock_file = workspace / 'compiler/fabric.lock.json'
     try:
@@ -185,12 +267,14 @@ def bootstrap(workspace):
     except (OSError, ValueError):
         loaders = []
     return dict(workspace=str(workspace), bundled=bundled, setup=setup, config=str(config) if config else '', configFields=fields,
+                minecraftVersion=version, versions=list(SUPPORTED_VERSIONS),
                 loaders=loaders,
                 exportOptions=str(workspace / 'ios/C0Harness/ExportOptions.plist'),
                 output=str(storage_paths(workspace)['builds']), storage={k: str(v) for k, v in storage_paths(workspace).items()}, jobs=history(workspace))
 
 def check(request):
     workspace_path(request['workspace'])
+    version = minecraft_version(request.get('minecraftVersion'))
     checks = []
     def add(name, fn):
         try:
@@ -212,15 +296,15 @@ def check(request):
     add('构建主机', host)
     add('Xcode 与 iPhoneOS SDK', lambda: subprocess.check_output(['/usr/bin/xcrun', '--sdk', 'iphoneos', '--show-sdk-version'], text=True, timeout=20).strip())
     def configuration():
-        _, paths = config_summary(request['config'])
+        _, paths = config_summary(request['config'], version)
         java = Path(read_json(paths['prepared'] / 'result.json')['javaHome']) / 'bin/native-image'
-        version = subprocess.check_output([str(java), '--version'], text=True, timeout=25)
-        first = version.splitlines()[0]
-        if 'GraalVM CE 25.0.2' not in version:
+        output = subprocess.check_output([str(java), '--version'], text=True, timeout=25)
+        first = output.splitlines()[0]
+        if 'GraalVM CE 25.0.2' not in output:
             return first + ' 与记录中的 GraalVM CE 25.0.2 不同，构建仍会继续', True
         return '全部前置路径存在 · ' + first
     add('AOT 工具链与游戏资源', configuration)
-    add('原生依赖库', lambda: native_dependencies.preflight(ROOT, resolve(request['config'])) and '源码与依赖哈希一致')
+    add('原生依赖库', lambda: native_dependencies.preflight(ROOT, resolve(request['config']), version) and '源码与依赖哈希一致')
     def signing():
         from mcfao import resolve_development_team
         team = request.get('team', '').strip()
@@ -240,16 +324,24 @@ def check(request):
 
 def save_config(request):
     workspace = workspace_path(request['workspace'])
+    version = minecraft_version(request.get('minecraftVersion'))
     values = request['fields']
-    if not isinstance(values, dict) or not set(KEYS) <= values.keys() or values.keys() - set(KEYS) - OPTIONAL_KEYS:
+    if not isinstance(values, dict) or not set(KEYS) <= values.keys() or values.keys() - set(KEYS) - OPTIONAL_KEYS - {PROFILE_KEY}:
         raise ValueError('配置字段不完整')
-    values = {k: str(resolve(v)) for k, v in values.items() if v}
+    # Version profiles are stored exactly as the user saved them. Only the root
+    # paths are resolved here; rewriting profile entries would silently move
+    # another line's inputs.
+    profiles = values.get(PROFILE_KEY)
+    values = {k: str(resolve(v)) for k, v in values.items() if v and k != PROFILE_KEY}
     if not set(KEYS) <= values.keys(): raise ValueError('请填写所有必需路径')
+    if profiles is not None:
+        if not isinstance(profiles, dict): raise ValueError('版本配置必须是对象')
+        values[PROFILE_KEY] = profiles
     folder = storage_paths(workspace)['jobs'] / 'configs'
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / (uuid4().hex + '.json')
     write_json(path, values)
-    return dict(path=str(path))
+    return dict(path=str(path), minecraftVersion=version)
 
 def icon_preview(request):
     """Render the chosen artwork so the UI can show exactly what gets packaged."""
@@ -358,6 +450,48 @@ def source_overrides(report, build_loader):
     message = f'来源 Fabric Loader {source_loader} → 构建器 {build_loader}'
     return [dict(code='FABRIC_LOADER_OVERRIDE', sourceLoader=source_loader, buildLoader=build_loader, message=message)]
 
+def source_version(report, requested=None):
+    """Cross-check the requested version against what the pack actually declares.
+
+    The source is re-scanned on every entry, so the declaration here is the
+    authority: a request that disagrees with the pack (or a pack whose version
+    could not be recognized) is rejected instead of being built as the requested
+    line. None means "follow the declaration", which is only used by direct
+    library callers; every job records an explicit version.
+    """
+    if report.get('fatal') and not report.get('target_minecraft'):
+        raise ValueError('来源检查失败：' + '; '.join(f['message'] for f in report.get('findings', []) if f['severity'] == 'error'))
+    declared = report.get('target_minecraft')
+    if not declared:
+        raise ValueError('无法识别整合包的 Minecraft 版本，请重新选择整合包')
+    if requested is None: return declared
+    expected = minecraft_version(requested)
+    if expected != declared:
+        raise ValueError(f'整合包声明的 Minecraft 版本为 {declared}，与请求的 {expected} 不一致，请重新选择整合包')
+    return declared
+
+def recorded_version(build):
+    """The line an existing build was compiled as, read from its own records.
+
+    A caller-supplied version is never trusted for a re-export: the build
+    inputs are the only authority. Builds from before multi-version support
+    have no version field anywhere and were 26.1.2 by definition.
+    """
+    build = Path(build)
+    try:
+        result = read_json(build / 'result.json')
+    except (OSError, ValueError):
+        result = {}
+    value = result.get('minecraftVersion')
+    if value is not None: return minecraft_version(value)
+    inputs = build / 'inputs.json'
+    if inputs.is_file():
+        try:
+            value = read_json(inputs).get('version')
+        except (OSError, ValueError):
+            value = None
+        if value is not None: return minecraft_version(value)
+    return DEFAULT_VERSION
 def choose_loader(workspace, report, requested=None):
     """Select a verified Loader for this pack and record why."""
     lock = read_json(workspace / 'compiler/fabric.lock.json')
@@ -380,6 +514,8 @@ def resource_selection(report, selection):
 def validate_request(request):
     workspace = workspace_path(request['workspace'])
     if not request.get('existingBuild'): test_version(request.get('testVersion', ''))
+    if not request.get('existingBuild'):
+        request['minecraftVersion'] = minecraft_version(request.get('minecraftVersion'))
     if not isinstance(request.get('unsigned', False), bool): raise ValueError('未签名选项必须为布尔值')
     if request.get('loaderVersion') not in (None, '', 'auto') and request['loaderVersion'] not in verified_loaders(read_json(workspace / 'compiler/fabric.lock.json')):
         raise ValueError('请选择已验证的 Fabric Loader 版本')
@@ -405,9 +541,10 @@ def validate_request(request):
             raise ValueError('Team ID 无效')
         if result.get('loader') in ('fabric', 'vanilla'):
             request['loader'] = result['loader']
+        request['minecraftVersion'] = recorded_version(resolve(request['existingBuild']))
         return workspace
-    config_summary(request['config'])
-    native_dependencies.preflight(ROOT, resolve(request['config']))
+    config_summary(request['config'], request.get('minecraftVersion'))
+    native_dependencies.preflight(ROOT, resolve(request['config']), minecraft_version(request.get('minecraftVersion')))
     if not request.get('unsigned'):
         if plistlib.loads(resolve(request['exportOptions']).read_bytes()).get('method') != 'debugging': raise ValueError('请选择 debugging 导出配置')
         if request.get('team') and not re.fullmatch('[A-Z0-9]{10}', request['team']): raise ValueError('Team ID 无效')
@@ -416,6 +553,7 @@ def validate_request(request):
         raise ValueError('请选择专用的构建产物目录')
     if request['loader'] == 'fabric':
         report = scan_pack(resolve(request.get('source', '')))
+        source_version(report, request.get('minecraftVersion'))
         chosen = choose_loader(workspace, report, request.get('loaderVersion'))
         request['fabricLoaderVersion'] = chosen['version']
         source_overrides(report, chosen['version'])
@@ -460,8 +598,9 @@ def download(entry, target):
         except (OSError, ValueError, http.client.HTTPException) as e: last = e
     raise ValueError(str(last or '没有下载地址'))
 
-def stage_source(source, destination, progress=lambda _: None, cancelled=lambda: False, *, selection=None, loader_version=None):
+def stage_source(source, destination, progress=lambda _: None, cancelled=lambda: False, *, selection=None, loader_version=None, version=None):
     report = scan_pack(source)
+    version = source_version(report, version)
     lock = read_json(ROOT / 'compiler/fabric.lock.json')
     chosen = select_loader(lock, report.get('fabric_loader_version'), loader_version)
     loader = chosen['version']
@@ -549,16 +688,16 @@ def stage_source(source, destination, progress=lambda _: None, cancelled=lambda:
     mods = game / 'mods'
     if not mods.is_dir() or not mod_candidates(mods): raise ValueError('没有 Fabric Mod JAR；无 Mod 时请选择原版')
     if len(mod_candidates(mods)) > 128: raise ValueError('当前构建器最多支持 128 个根 Mod JAR')
-    write_json(destination / 'mmc-pack.json', {'components': [{'uid': 'net.minecraft', 'version': '26.1.2'}, {'uid': 'net.fabricmc.fabric-loader', 'version': loader}]})
+    write_json(destination / 'mmc-pack.json', {'components': [{'uid': 'net.minecraft', 'version': version}, {'uid': 'net.fabricmc.fabric-loader', 'version': loader}]})
     staged = scan_pack(destination)
     if staged['fatal']: raise ValueError('下载或复制后的 Mod 检查未通过：' + '; '.join(f['message'] for f in staged['findings'] if f['severity'] == 'error'))
     hashes = {}
     for p in content_paths(game):
         if p.is_file():
             with p.open('rb') as f: hashes[str(p.relative_to(game))] = hashlib.file_digest(f, 'sha256').hexdigest()
-    write_json(game / 'import.json', dict(status='INSTANCE_FILES_IMPORTED', root=str(game.resolve()), mods=str(mods.resolve()), files={name: dict(sha256=digest, bytes=(game / name).stat().st_size) for name, digest in hashes.items()}, source=str(source), resourceSelection=selection, compatibilityOverrides=overrides, loaderSelection=chosen))
+    write_json(game / 'import.json', dict(status='INSTANCE_FILES_IMPORTED', root=str(game.resolve()), mods=str(mods.resolve()), minecraftVersion=version, files={name: dict(sha256=digest, bytes=(game / name).stat().st_size) for name, digest in hashes.items()}, source=str(source), resourceSelection=selection, compatibilityOverrides=overrides, loaderSelection=chosen))
     with (game / 'import.json').open('rb') as f: hashes['import.json'] = hashlib.file_digest(f, 'sha256').hexdigest()
-    write_json(destination / 'source.json', dict(source=str(source), filesSHA256=hashes, report=staged, sourceReport=report, resourceSelection=selection, compatibilityOverrides=overrides, loaderSelection=chosen))
+    write_json(destination / 'source.json', dict(source=str(source), minecraftVersion=version, filesSHA256=hashes, report=staged, sourceReport=report, resourceSelection=selection, compatibilityOverrides=overrides, loaderSelection=chosen))
     return mods, game
 
 def static_exclusion_plan(facts, source_folder):
@@ -760,8 +899,9 @@ def compile_build(command, folder, request, build, mods, game, update, env, prev
     previous = list(previous or [])
     quick_build = request.get('quickBuild', False)
     parallelism = '4' if quick_build else '3'
+    version = minecraft_version(request.get('minecraftVersion'))
     for _ in range(3):
-        args = [*command, 'build', '--version', '26.1.2', '--loader', request['loader'], '--renderer', 'gl41',
+        args = [*command, 'build', '--version', version, '--loader', request['loader'], '--renderer', 'gl41',
                 '--heap-gib', str(aot_heap_gib()), '--parallelism', parallelism, '--target', 'ios-arm64',
                 '--config', resolve(request['config']), '--output', build]
         if quick_build:
@@ -886,6 +1026,10 @@ def run_job(path):
                 request.get('loaderVersion'))
             request['fabricLoaderVersion'] = chosen['version']
             job['loaderSelection'] = chosen
+            # A resumed job keeps the version it was launched with; the source
+            # is re-scanned so a pack edited mid-job cannot change the line.
+            request['minecraftVersion'] = source_version(
+                scan_pack(resolve(request['source'])), request.get('minecraftVersion'))
         if job.get('kind') == 'dependencies':
             require_mount('native dependency rebuild')
             env = dict(os.environ, PYTHONUNBUFFERED='1', MCFAO_STREAM_LOGS='1')
@@ -894,7 +1038,8 @@ def run_job(path):
             native_dependencies.rebuild(ROOT, resolve(request['config']), request['dependencyKeys'],
                 Path(job['build']),
                 lambda argv, key: execute(argv, folder, key, update, 'dependency-' + key, env),
-                lambda: CANCELLED or (folder / 'cancel').exists(), update, write_json)
+                lambda: CANCELLED or (folder / 'cancel').exists(), update, write_json,
+                minecraft_version(job.get('minecraftVersion') or request.get('minecraftVersion')))
             update(state='succeeded', stage='dependencies-complete', finishedAt=now())
             return
         validate_request(request)
@@ -923,6 +1068,9 @@ def run_job(path):
                     record = read_json(source / 'source.json')
                     if record.get('resourceSelection') != request.get('resourceSelection'):
                         raise ValueError('暂存内容的资源选择与任务不一致，请新建构建')
+                    staged_version = record.get('minecraftVersion') or DEFAULT_VERSION
+                    if staged_version != minecraft_version(request.get('minecraftVersion')):
+                        raise ValueError('暂存内容的 Minecraft 版本与任务不一致，请新建构建')
                     staged_loader = (record.get('loaderSelection') or {}).get('version')
                     if staged_loader and staged_loader != request.get('fabricLoaderVersion'):
                         raise ValueError('暂存内容的 Fabric Loader 与任务不一致，请新建构建')
@@ -933,7 +1081,7 @@ def run_job(path):
                     expected = {name: digest for name, digest in record['filesSHA256'].items() if not is_metadata(name)}
                     if actual != expected: raise ValueError('暂存内容发生变化，请新建构建')
                     mods = game / 'mods'
-                else: mods, game = stage_source(resolve(request['source']), source, lambda s: print(s, flush=True), lambda: CANCELLED or (folder / 'cancel').exists(), selection=request.get('resourceSelection'), loader_version=request.get('fabricLoaderVersion'))
+                else: mods, game = stage_source(resolve(request['source']), source, lambda s: print(s, flush=True), lambda: CANCELLED or (folder / 'cancel').exists(), selection=request.get('resourceSelection'), loader_version=request.get('fabricLoaderVersion'), version=request.get('minecraftVersion'))
                 update(compatibilityOverrides=read_json(source / 'source.json').get('compatibilityOverrides', []))
                 update(sourceFolder=str(source))
             execute([*command, 'doctor', '--renderer', 'gl41', '--config', resolve(request['config'])], folder, 'doctor', update, 'doctor', env)
@@ -1004,6 +1152,12 @@ def run_job(path):
 
 def retry_request(job, workspace, quick_build=None):
     request = dict(job['request'])
+    # A retry replays the recorded line even if the GUI no longer has a source
+    # selected. Jobs recorded before multi-version support have no field and
+    # resolve to 26.1.2 later, so the stored request stays byte-identical.
+    recorded = request.get('minecraftVersion') or job.get('minecraftVersion')
+    if recorded is not None:
+        request['minecraftVersion'] = minecraft_version(recorded)
     if quick_build is not None and not request.get('existingBuild'):
         request['quickBuild'] = quick_build
     if not request.get('workspace') or not (workspace / 'bundle-manifest.json').is_file():
@@ -1026,6 +1180,7 @@ def _start(request, retry=None):
     if request.get('kind') == 'dependencies':
         return start_dependencies(request)
     workspace = validate_request(request)
+    version = minecraft_version(request.get('minecraftVersion'))
     require_mount('desktop build')
     require_space({**storage_paths(workspace), 'builds': resolve(request['output'])})
     root = storage_paths(workspace)['jobs']
@@ -1036,7 +1191,8 @@ def _start(request, retry=None):
         ident = uuid4().hex
         folder = root / ident
         folder.mkdir()
-        job = dict(id=ident, name=('Fabric' if request['loader'] == 'fabric' else '原版') + ' · 26.1.2', request=request,
+        job = dict(id=ident, name=('Fabric' if request['loader'] == 'fabric' else '原版') + ' · ' + version,
+                   minecraftVersion=version, request=request,
                    state='queued', stage='validate', startedAt=now(), updatedAt=now(),
                    build=str(resolve(request['output']) / ('build-' + ident[:12])), folder=str(folder), error='', retryOf=retry)
         if request['loader'] == 'fabric' and not request.get('existingBuild'):
@@ -1049,12 +1205,15 @@ def _start(request, retry=None):
         # A retry must reuse the Loader the first attempt recorded, otherwise a
         # changed pack declaration would silently switch the engine mid-job.
         previous = read_json(job_path(workspace, retry))
+        previous_version = previous.get('minecraftVersion') or (previous.get('request') or {}).get('minecraftVersion')
+        if previous_version and minecraft_version(previous_version) != version:
+            raise ValueError('重试不能改变 Minecraft 版本')
         previous_loader = (previous.get('loaderSelection') or {}).get('version')
         if previous_loader and request.get('fabricLoaderVersion') != previous_loader:
             raise ValueError('重试不能改变 Fabric Loader 版本')
     if request.get('existingBuild'):
         job['build'] = str(resolve(request['existingBuild']))
-        job['name'] = 'IPA 导出 · 26.1.2'
+        job['name'] = 'IPA 导出 · ' + version
     if retry:
         old = read_json(job_path(workspace, retry))
         if (old['state'] in ACTIVE or old['state'] == 'succeeded'
@@ -1074,9 +1233,16 @@ def _start(request, retry=None):
 
 def start_dependencies(request):
     workspace = workspace_path(request['workspace'])
+    version = minecraft_version(request.get('minecraftVersion'))
     keys = native_dependencies.plan(request.get('dependencyKeys'))
     config = resolve(request.get('config', ''))
-    native_dependencies.config_paths(config)
+    # A non-default rebuild must be requested for a line the config actually
+    # declares, so a 1.21.1 rebuild cannot write over the 26.1.2 inputs.
+    if version != DEFAULT_VERSION and not config_declares(config, version):
+        raise ValueError('构建配置与所选 Minecraft 版本不一致，请重新选择配置')
+    # Resolve the dependency paths for the selected line only; a profile entry
+    # that names another version must not be rebuilt under this one.
+    native_dependencies.config_paths(config, version)
     require_mount('native dependency rebuild')
     graphics = storage_paths(workspace)['builds'] / 'native-dependencies'
     require_space({**storage_paths(workspace), 'builds': graphics})
@@ -1090,7 +1256,8 @@ def start_dependencies(request):
         folder = root / ident
         folder.mkdir()
         output = graphics / ('dependencies-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + ident[:8])
-        job = dict(id=ident, kind='dependencies', name='原生依赖库重建', request={**request, 'dependencyKeys': keys},
+        job = dict(id=ident, kind='dependencies', name='原生依赖库重建 · ' + version, minecraftVersion=version,
+                   request={**request, 'dependencyKeys': keys, 'minecraftVersion': version},
                    state='queued', stage='validate', startedAt=now(), updatedAt=now(), build=str(output),
                    folder=str(folder), error='')
         path = folder / 'job.json'
@@ -1126,9 +1293,12 @@ def main():
         request = json.loads(args.request)
         if args.action in ('start', 'retry'):
             require_mount(f'desktop workbench {args.action}')
-        if args.action == 'bootstrap': result = bootstrap(workspace)
+        if args.action == 'bootstrap':
+            result = bootstrap(workspace, request.get('minecraftVersion') or selected_version(workspace))
         elif args.action == 'check': result = check(request)
-        elif args.action == 'dependencies': result = native_dependencies.inventory(workspace, resolve(request['config']))
+        elif args.action == 'dependencies':
+            result = native_dependencies.inventory(workspace, resolve(request['config']),
+                                                   minecraft_version(request.get('minecraftVersion')))
         elif args.action == 'save-config': result = save_config(request)
         elif args.action == 'icon-preview': result = icon_preview(request)
         elif args.action == 'storage-settings': result = space_report(storage_paths(workspace))
@@ -1152,10 +1322,19 @@ def main():
             with control_lock(workspace):
                 if any(j['state'] in ACTIVE for j in history(workspace)):
                     raise ValueError('请在构建结束后准备环境')
-                result = start_setup(request.get('fields', {}).get('owned') is True)
+                fields = request.get('fields', {})
+                # A form action that carries only fields has no version, so the
+                # line recorded by the last bootstrap is the user's selection.
+                version = minecraft_version(request.get('minecraftVersion') or selected_version(workspace))
+                record_selection(workspace, version)
+                result = start_setup(fields.get('owned') is True, version)
+                # first_run keeps one status record; a worker already preparing
+                # another line is not this line's environment.
+                result = setup_for_version(result, version)
         elif args.action == 'setup-status':
             from first_run import status as setup_status
-            result = setup_status()
+            version = minecraft_version(request.get('minecraftVersion') or selected_version(workspace))
+            result = setup_for_version(setup_status(), version)
         elif args.action == 'start': result = start(request)
         elif args.action == 'retry':
             if 'quickBuild' in request and not isinstance(request['quickBuild'], bool):

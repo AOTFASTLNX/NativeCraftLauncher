@@ -46,7 +46,8 @@ def stage(output, root=ROOT):
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
         files[name] = hashlib.sha256(source.read_bytes()).hexdigest()
-    for name in (B1_EVIDENCE, 'tools/mcfao.py', 'tools/desktop_workbench.py', 'tools/first_run.py', 'compiler/asm.lock.json',
+    for name in (B1_EVIDENCE, 'tools/mcfao.py', 'tools/desktop_workbench.py', 'tools/first_run.py',
+                 'tools/game_versions.py', 'compiler/asm.lock.json',
                  'tools/account_service.py', 'compiler/microsoft-auth.json',
                  'interop/b0/src/fabricaot/b0/ParentEntrypoint.java',
                  'interop/fabric/tool/mcfao/build/AotExport.java', 'interop/b0/resources/fabricaot-b0.classtweaker',

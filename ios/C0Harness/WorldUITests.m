@@ -16,6 +16,37 @@
     [self addAttachment:frame];
 }
 
+// Build with tests/fixtures/launcher/run_main_failure.c as FAOT_CLIENT_LIBRARY.
+// Enable only in that dedicated fixture's xctestrun EnvironmentVariables.
+- (void)testLauncherReportsRuntimeFailure {
+    XCTSkipUnless([NSProcessInfo.processInfo.environment[@"MCFAO_RUNTIME_FAILURE_FIXTURE"] isEqual:@"1"],
+                  @"Requires the first-party runtime failure fixture");
+    self.continueAfterFailure = NO;
+    XCUIApplication *app = [XCUIApplication new];
+    [app launch];
+    XCUIElement *launch = app.buttons[@"进入世界  →"];
+    XCTAssertTrue([launch waitForExistenceWithTimeout:20]);
+    [launch tap];
+    XCUIElement *exited = app.buttons[@"已退出 · 重开应用"];
+    XCTAssertTrue([exited waitForExistenceWithTimeout:20]);
+    XCTAssertFalse(exited.enabled);
+    XCTAssertFalse(app.buttons[@"加载中"].exists);
+    XCTAssertTrue(app.staticTexts[@"启动失败：Java 入口已返回 1"].exists);
+    [app.buttons[@"查看日志"] tap];
+    XCUIElement *console = app.textViews.firstMatch;
+    XCTAssertTrue([console waitForExistenceWithTimeout:5]);
+    NSString *log = console.value;
+    XCTAssertTrue([log containsString:@"MCFAO_RUNTIME_FAILURE_FIXTURE"]);
+    XCTAssertTrue([log containsString:@"MCFAO_JMX_DISABLED_ARGUMENT_PASS"]);
+    XCTAssertTrue([log containsString:@"中间日志省略"]);
+    XCTAssertTrue([log containsString:@"MCFAO_RUNTIME_FAILURE_END"]);
+    XCTAssertTrue([log containsString:@"run_main returned 1"]);
+    [self attachFrame:@"launcher-runtime-failure-log"];
+    [app.navigationBars.buttons[@"Done"] tap];
+    XCTAssertTrue([exited waitForExistenceWithTimeout:5]);
+    [self attachFrame:@"launcher-runtime-failure"];
+}
+
 - (void)testLandscapeInventory {
     self.continueAfterFailure=NO;
     XCUIApplication *app=[XCUIApplication new];

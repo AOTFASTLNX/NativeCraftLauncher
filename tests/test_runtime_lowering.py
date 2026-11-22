@@ -49,6 +49,7 @@ class RuntimeLoweringTests(unittest.TestCase):
             compile_java(home, classpath, [
                 ROOT / "interop/fabric/tool/mcfao/build/TextureImageLowering.java",
                 ROOT / "interop/fabric/tool/mcfao/aot/TextureImage.java",
+                ROOT / "interop/fabric/tool/mcfao/aot/TexturePixels.java",
                 ROOT / "interop/diagnostics/TextureImageProbe.java",
             ], classes, output / "compile")
             result = capture([str(home / "bin/java"), "-Xverify:all", "-Djava.awt.headless=true",

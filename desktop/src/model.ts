@@ -34,7 +34,9 @@ export interface Report {
   resources?: ResourceEntry[];
   resources_fingerprint?: string;
   source: string;
-  target_minecraft: string;
+  /** Resolved, supported line; an unresolved report is rejected at parse time. */
+  target_minecraft: MinecraftVersion;
+  minecraft_version?: string | null;
   status: "STATIC_PREFLIGHT_ONLY";
   source_type: string;
   pack_name?: string;
@@ -67,6 +69,23 @@ export interface Settings {
   config: string;
   output: string;
 }
+
+/** Build lines the desktop workbench can hand to the compiler. */
+export const GAME_VERSIONS = [
+  { version: "26.1.2", java: 25, label: "Minecraft 26.1.2 · Java 25" },
+  { version: "1.21.1", java: 21, label: "Minecraft 1.21.1 · Java 21" },
+] as const;
+export type MinecraftVersion = (typeof GAME_VERSIONS)[number]["version"];
+export const DEFAULT_VERSION: MinecraftVersion = "26.1.2";
+export const SUPPORTED_VERSIONS: readonly MinecraftVersion[] =
+  GAME_VERSIONS.map((row) => row.version);
+export const isMinecraftVersion = (
+  value: unknown,
+): value is MinecraftVersion =>
+  typeof value === "string" &&
+  SUPPORTED_VERSIONS.includes(value as MinecraftVersion);
+export const javaVersion = (value: unknown): number =>
+  GAME_VERSIONS.find((row) => row.version === value)?.java ?? 25;
 export interface Task {
   id: string;
   name: string;
@@ -195,7 +214,15 @@ export function parseReport(value: unknown): Report {
   }
   return {
     source: string(value.source),
-    target_minecraft: string(value.target_minecraft, 64),
+    // A report whose version could not be resolved (or resolved to something
+    // this build line does not support) is unusable: reject it instead of
+    // letting the GUI label it as 26.1.2.
+    target_minecraft: parseTargetVersion(value.target_minecraft),
+    ...(typeof value.minecraft_version === "string"
+      ? { minecraft_version: value.minecraft_version.slice(0, 64) }
+      : value.minecraft_version === null
+        ? { minecraft_version: null }
+        : {}),
     status: "STATIC_PREFLIGHT_ONLY",
     source_type: string(value.source_type, 64),
     mods,
@@ -217,6 +244,13 @@ export function parseReport(value: unknown): Report {
       ? { manifest_files: count(value.manifest_files) }
       : {}),
   };
+}
+function parseTargetVersion(value: unknown): MinecraftVersion {
+  if (!isMinecraftVersion(value))
+    throw new Error(
+      "报告没有可识别的受支持 Minecraft 版本，请重新检查整合包。",
+    );
+  return value;
 }
 function parseResources(value: Record<string, unknown>): {
   resources: ResourceEntry[];
@@ -331,7 +365,10 @@ export function prepareCommand(
   settings: Settings,
   mods: string,
   windows = false,
+  version: string = DEFAULT_VERSION,
 ): string {
+  if (!isMinecraftVersion(version))
+    throw new Error(`不支持 Minecraft ${version}`);
   if (
     ![settings.workspace, settings.config, settings.output, mods].every((v) =>
       v.trim(),
@@ -347,7 +384,7 @@ export function prepareCommand(
     path,
     "build",
     "--version",
-    "26.1.2",
+    version,
     "--loader",
     "fabric",
     "--target",

@@ -100,10 +100,11 @@ public final class IndigoGateProbe implements Opcodes {
 
     public static void main(String[] args) throws Exception {
         verifyJadeAndConstructorFallback();
+        for (String hash : java.util.List.of(RuntimeLowering.INDIGO_PLUGIN_SHA256, RuntimeLowering.INDIGO_PLUGIN_1211_SHA256))
         for (boolean enabled : new boolean[]{false, true}) {
             var node = sample("shouldApplyIndigo");
             var report = new ArrayList<String>();
-            RuntimeLowering.foldIndigoGate(node, enabled, RuntimeLowering.INDIGO_PLUGIN_SHA256, report);
+            RuntimeLowering.foldIndigoGate(node, enabled, false, hash, report);
             var writer = new ClassWriter(0);
             node.accept(writer);
             byte[] bytes = writer.toByteArray();
@@ -114,12 +115,26 @@ public final class IndigoGateProbe implements Opcodes {
                 throw new AssertionError("Renderer metadata decision changed");
             }
         }
+        for (boolean enabled : new boolean[]{false, true}) {
+            var node = sample("shouldForceCompatibility");
+            RuntimeLowering.foldIndigoGate(node, !enabled, enabled,
+                    RuntimeLowering.INDIGO_PLUGIN_1211_SHA256, new ArrayList<>());
+            if (!define(node).getMethod("enabled").invoke(null).equals(enabled)) {
+                throw new AssertionError("Force compatibility decision changed");
+            }
+        }
+        for (String hash : java.util.List.of("changed", RuntimeLowering.INDIGO_PLUGIN_SHA256)) {
+            try {
+                RuntimeLowering.foldIndigoGate(sample("shouldForceCompatibility"), true, false, hash, new ArrayList<>());
+                throw new AssertionError("Unaudited force compatibility query accepted");
+            } catch (IllegalArgumentException expected) { }
+        }
         try {
-            RuntimeLowering.foldIndigoGate(sample("shouldApplyIndigo"), true, "changed", new ArrayList<>());
+            RuntimeLowering.foldIndigoGate(sample("shouldApplyIndigo"), true, false, "changed", new ArrayList<>());
             throw new AssertionError("Changed plugin was accepted");
         } catch (IllegalArgumentException expected) { }
         var other = sample("unrelated");
-        RuntimeLowering.foldIndigoGate(other, true, "changed", new ArrayList<>());
+        RuntimeLowering.foldIndigoGate(other, true, false, "changed", new ArrayList<>());
         if (!(other.methods.getFirst().instructions.getFirst() instanceof MethodInsnNode)) {
             throw new AssertionError("Unrelated plugin method changed");
         }

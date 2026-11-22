@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,20 @@ class ExternalStorageTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
+        # A shell that exports MCFAO_STORAGE_CONFIG for a regression run would
+        # otherwise make the manifest-free path measure the shared jobs/cache
+        # roots, and a mock mount could then be evaluated against a real /Volumes/K.
+        inherited = patch.dict(os.environ, {}, clear=False)
+        inherited.start()
+        for name in [name for name in os.environ if name.startswith('MCFAO_')]:
+            del os.environ[name]
+        self.addCleanup(inherited.stop)
+        settings = self.root / 'storage.json'
+        settings.write_text(json.dumps({role: str(self.root / role)
+                                       for role in ('cache', 'builds', 'jobs', 'rust')}))
+        storage = patch.dict(os.environ, {'MCFAO_STORAGE_CONFIG': str(settings)})
+        storage.start()
+        self.addCleanup(storage.stop)
         self.volume = self.root / 'K'
         self.data = self.volume / 'MCFAO-data'
         self.data.mkdir(parents=True)

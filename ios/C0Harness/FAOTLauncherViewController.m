@@ -613,6 +613,12 @@ static const CGFloat kTransitionBlurDrift = 22.0;
     [self.gamePage refreshPage];
 }
 
+- (void)runtimeFinishedSuccess:(BOOL)succeeded summary:(NSString *)summary logPath:(NSString *)logPath {
+    // Return to the game page with the runtime's final status.
+    [self showPage:@"game"];
+    [self.gamePage showRuntimeFinished:succeeded summary:summary logPath:logPath];
+}
+
 - (void)pageRequestedLayoutEditor {
     [self pageRequestedLayoutEditorNamed:FAOTLauncherSettings.shared.layoutName];
 }

@@ -3,10 +3,13 @@
 #include "input_mapping.h"
 #include "pointer_motion.h"
 #include <assert.h>
+#include <math.h>
+#include <pthread.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-static int sizes, pixels, focused, chars, destroyed;
+static int sizes, pixels, focused, chars, charMods, destroyed;
 static GLFWwindow *window;
 static int keyDown,keyUp;static double cursorX,cursorY;
 static int buttonDown,buttonUp;
@@ -27,6 +30,11 @@ static void size(GLFWwindow *w,int a,int b){assert(w==window&&a==390&&b==844);si
 static void framebuffer(GLFWwindow *w,int a,int b){assert(w==window&&a==1170&&b==2532);pixels++;}
 static void focus(GLFWwindow *w,int f){assert(w==window&&f==1);focused++;}
 static void character(GLFWwindow *w,unsigned int c){assert(w==window&&c==0x1f600);chars++;}
+static void characterMods(GLFWwindow *w,unsigned int c,int mods){assert(w==window&&c==0x1f600&&mods==3);charMods++;}
+static void *delayedCharacter(void *unused){
+    (void)unused;struct timespec delay={0,20000000};nanosleep(&delay,NULL);
+    assert(faot_glfw_enqueue(window,FAOT_EVENT_CHAR,0x1f600,0,3,0));return NULL;
+}
 static void destroyOnResize(GLFWwindow *w,int a,int b){(void)a;(void)b;glfwDestroyWindow(w);}
 int main(void){
     FAOTPointerMotion hover={0};double dx,dy;
@@ -56,9 +64,22 @@ int main(void){
     assert(glfwSetWindowSizeCallback(window,size)==NULL);
     glfwSetFramebufferSizeCallback(window,framebuffer);glfwSetWindowFocusCallback(window,focus);
     glfwSetCharCallback(window,character);
-    assert(faot_glfw_enqueue(window,FAOT_EVENT_CHAR,0x1f600,0,0,0));
+    assert(glfwSetCharModsCallback(window,characterMods)==NULL);
+    assert(faot_glfw_enqueue(window,FAOT_EVENT_CHAR,0x1f600,0,3,0));
     glfwPollEvents();assert(sizes==1&&pixels==1&&focused==1&&chars==1);
     glfwPollEvents();assert(sizes==1&&chars==1); /* No invented recurring events. */
+    assert(charMods==1);
+    double started=glfwGetTime();glfwWaitEventsTimeout(0.02);
+    assert(glfwGetTime()-started>=0.015&&chars==1);
+    double invalid[]={0.0,-1.0,NAN,INFINITY};
+    for(unsigned int i=0;i<sizeof invalid/sizeof invalid[0];i++){
+        glfwWaitEventsTimeout(invalid[i]);assert(glfwGetError(NULL)==GLFW_INVALID_VALUE);
+    }
+    pthread_t producer;assert(pthread_create(&producer,NULL,delayedCharacter,NULL)==0);
+    started=glfwGetTime();glfwWaitEventsTimeout(2.0);
+    assert(pthread_join(producer,NULL)==0);
+    assert(glfwGetTime()-started<1.0&&chars==2&&charMods==2);
+    assert(glfwSetCharModsCallback(window,NULL)==characterMods);
     int a=0,b=0;glfwGetFramebufferSize(window,&a,&b);assert(a==1170&&b==2532);
     glfwMakeContextCurrent(window);assert(glfwGetCurrentContext()==window);
     GLFWmonitor *m=glfwGetPrimaryMonitor();assert(m);

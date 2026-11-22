@@ -53,12 +53,24 @@ public final class Overlay {
                 }
                 if((name.startsWith("org/lwjgl/glfw/")||name.startsWith("org/lwjgl/stb/"))&&name.endsWith("CallbackI.class")){
                     ClassReader reader=new ClassReader(data);ClassWriter writer=new ClassWriter(0);
+                    String[] callbackField=new String[2];
+                    reader.accept(new ClassVisitor(Opcodes.ASM9){
+                        public FieldVisitor visitField(int access,String field,String desc,String sig,Object value){
+                            if(field.equals("CIF")&&desc.equals("Lorg/lwjgl/system/libffi/FFICIF;")
+                                    ||field.equals("DESCRIPTOR")&&desc.equals("Lorg/lwjgl/system/Callback$Descriptor;")){
+                                if(callbackField[0]!=null)throw new IllegalStateException("Ambiguous callback ABI: "+reader.getClassName());
+                                callbackField[0]=field;callbackField[1]=desc;
+                            }
+                            return null;
+                        }
+                    },ClassReader.SKIP_CODE);
+                    if(callbackField[0]==null)throw new IllegalStateException("Unknown callback ABI: "+reader.getClassName());
                     reader.accept(new ClassVisitor(Opcodes.ASM9,writer){
                         public MethodVisitor visitMethod(int access,String method,String desc,String sig,String[] ex){
                             MethodVisitor mv=super.visitMethod(access,method,desc,sig,ex);
                             if(!method.equals("<clinit>"))return mv;
                             mv.visitCode();mv.visitInsn(Opcodes.ACONST_NULL);
-                            mv.visitFieldInsn(Opcodes.PUTSTATIC,reader.getClassName(),"DESCRIPTOR","Lorg/lwjgl/system/Callback$Descriptor;");
+                            mv.visitFieldInsn(Opcodes.PUTSTATIC,reader.getClassName(),callbackField[0],callbackField[1]);
                             mv.visitInsn(Opcodes.RETURN);mv.visitMaxs(1,0);mv.visitEnd();return null;
                         }
                     },0);data=writer.toByteArray();descriptors++;

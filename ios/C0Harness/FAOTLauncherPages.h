@@ -26,6 +26,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// Shows 加载中 with a spinner and disables the button until -finishLaunching.
 - (void)showLaunching;
 - (void)finishLaunching;
+/// The runtime has stopped. The button stops inviting another launch because the isolate is
+/// single-use, and a log entry point is shown so the failure can be inspected on the device.
+- (void)showRuntimeFinished:(BOOL)succeeded summary:(NSString *)summary logPath:(nullable NSString *)logPath;
 @end
 
 @interface FAOTAccountPageController : UIViewController <FAOTLauncherPage>

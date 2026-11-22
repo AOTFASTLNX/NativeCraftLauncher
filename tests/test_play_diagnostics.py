@@ -66,6 +66,49 @@ public final class DiagFixture {
 }
 """
 
+# Mirrors Bootstrap: both standard streams are replaced before the diagnostics class is first
+# touched, so a sink that goes through System.out/System.err would lose every line.
+REDIRECT_FIXTURE = """
+package fixture;
+
+import java.io.ByteArrayOutputStream;
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+
+import fabricaot.diag.PlayDiagnostics;
+
+public final class RedirectFixture {
+    public static void main(String[] args) throws Exception {
+        ByteArrayOutputStream swallowed = new ByteArrayOutputStream();
+        PrintStream mute = new PrintStream(swallowed, true, StandardCharsets.UTF_8);
+        System.setOut(mute);
+        System.setErr(mute);
+
+        // Only now does PlayDiagnostics get initialized.
+        PlayDiagnostics.tick();
+        PlayDiagnostics.login("ClientboundLoginPacket[playerId=7]");
+        PlayDiagnostics.chunk(0, 0);
+        PlayDiagnostics.chunkDecode(0, 0);
+        PlayDiagnostics.tracker("WaitingForServer");
+        PlayDiagnostics.ready(true);
+        PlayDiagnostics.channelInactive();
+        Thread.sleep(450L);
+
+        mute.flush();
+        // A direct descriptor write still works, which proves the shared stderr was not closed.
+        PrintStream descriptor = new PrintStream(
+                new FileOutputStream(FileDescriptor.err), true, StandardCharsets.UTF_8);
+        String leaked = swallowed.toString(StandardCharsets.UTF_8);
+        long diagLines = leaked.lines().filter(line -> line.contains("[MCFAO_DIAG]")).count();
+        descriptor.println("REDIRECT_LEAKED_DIAG_LINES=" + diagLines);
+        descriptor.println("REDIRECT_DESCRIPTOR_OPEN");
+        descriptor.flush();
+    }
+}
+"""
+
 
 class PlayDiagnosticsTests(unittest.TestCase):
     @classmethod
@@ -78,20 +121,28 @@ class PlayDiagnosticsTests(unittest.TestCase):
             raise unittest.SkipTest("PlayDiagnostics source is not present")
 
     def compile_and_run(self, directory: Path, enabled: bool, stalled=False, graphics=False) -> str:
-        source = directory / "DiagFixture.java"
-        source.write_text(FIXTURE)
+        code, stdout, stderr = self.compile_and_execute(directory, enabled, stalled, graphics)
+        self.assertEqual(code, 0, stderr)
+        return stdout + stderr
+
+    def compile_and_execute(self, directory: Path, enabled: bool, stalled=False, graphics=False,
+                            fixture: str = FIXTURE, main: str = "fixture.DiagFixture",
+                            extra: tuple = (), heartbeat=None):
+        source = directory / (main.rsplit(".", 1)[-1] + ".java")
+        source.write_text(fixture)
         subprocess.run([str(self.home / "bin/javac"), "--release", "25", "-proc:none",
                         "-d", str(directory / "classes"), str(DIAGNOSTICS), str(source)],
                        check=True, capture_output=True, text=True, timeout=120)
         result = subprocess.run([
             str(self.home / "bin/java"), f"-Dmcfao.diag.play={'true' if enabled else 'false'}",
             "-Dmcfao.diag.tickStallSeconds=1" if stalled else "-Dmcfao.diag.tickStallSeconds=5",
-            "-Dmcfao.diag.heartbeatMillis=100" if stalled else "-Dmcfao.diag.heartbeatMillis=2000",
-            "-cp", str(directory / "classes"), "fixture.DiagFixture", *(["stall"] if stalled else [])],
+            "-Dmcfao.diag.heartbeatMillis=100" if stalled or heartbeat == 100
+            else "-Dmcfao.diag.heartbeatMillis=2000",
+            "-cp", str(directory / "classes"), main,
+            *extra, *(["stall"] if stalled else [])],
             capture_output=True, text=True, timeout=60,
             env={**os.environ, "FAOT_GL41_DIAGNOSTICS": "1" if graphics else "0"})
-        self.assertEqual(result.returncode, 0, result.stderr)
-        return result.stdout + result.stderr
+        return result.returncode, result.stdout, result.stderr
 
     def test_graphics_memory_diagnostics_are_opt_in_and_rate_limited(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -130,6 +181,20 @@ class PlayDiagnosticsTests(unittest.TestCase):
             output = self.compile_and_run(Path(temp), True)
             self.assertIn("error=java.lang.RuntimeException: fixture failure", output)
             self.assertIn("event=connection_exception_frame", output)
+
+    def test_redirected_standard_streams_cannot_swallow_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temp:
+            code, stdout, stderr = self.compile_and_execute(
+                Path(temp), True, fixture=REDIRECT_FIXTURE, main="fixture.RedirectFixture")
+        self.assertEqual(code, 0, stderr)
+        # The sink that Bootstrap installs must stay empty; the descriptor must carry the lines.
+        self.assertRegex(stderr, r"REDIRECT_LEAKED_DIAG_LINES=0")
+        self.assertIn("REDIRECT_DESCRIPTOR_OPEN", stderr)
+        self.assertNotIn("[MCFAO_DIAG]", stdout)
+        for event in ("diagnostics_start", "configuration_to_play", "chunk_received",
+                      "chunk_decoded", "level_load_tracker", "level_load_ready",
+                      "channel_inactive"):
+            self.assertIn("event=" + event, stderr)
 
     def test_waiting_client_tick_is_dumped_while_network_keeps_arriving(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "note": "Only the Fabric intermediary mapping artifact is pinned here. Mojang client jars and client mappings are user-local inputs and are never redistributed.",
+  "versions": {
+    "1.21.1": {
+      "java": 21,
+      "runtimeNamespace": "official",
+      "mappingNamespaces": ["obfuscated", "intermediary", "official"],
+      "intermediary": {
+        "version": "v2",
+        "url": "https://maven.fabricmc.net/net/fabricmc/intermediary/1.21.1/intermediary-1.21.1-v2.jar",
+        "sha256": "e8bd6a4c39e235ee2dc73063558610775c72a2572fa0c6b32915b149074012a6",
+        "size": 582921
+      }
+    }
+  }
+}

@@ -2,6 +2,8 @@
 from __future__ import annotations
 import argparse
 from pathlib import Path
+import plistlib
+import re
 import subprocess
 from uuid import UUID
 
@@ -11,6 +13,12 @@ RENDERERS = ("metal", "gl41")
 # kept as an explicitly selected comparison path, never the default.
 DEFAULT_RENDERER = "gl41"
 BUILD_PROVENANCE = "FAOTBuildProvenance.json"
+# The packaged asset index is fixed by the client version. Only the default
+# line may fall back to its historical index; another line must name its own,
+# so a 1.21.1 app can never be validated against 26.1.2's asset tree.
+DEFAULT_ASSET_INDEX = "30"
+ASSET_INDEX_BY_VERSION = {"26.1.2": DEFAULT_ASSET_INDEX, "1.21.1": "17"}
+ASSET_INDEX_ID = re.compile(r"[0-9]{1,8}")
 
 
 def dylib_uuid(path: Path):
@@ -33,6 +41,56 @@ def config_names(renderer):
     libraries(renderer)
     return ("glfw", "lwjgl", "openal") + (("metal", "shaders") if renderer == "metal" else ("gl41", "lwjglOpengl"))
 
+
+def _expanded(value):
+    """A real Info.plist value, or None when it is absent or unexpanded.
+
+    xcodebuild substitutes ``$(FAOT_ASSET_INDEX)`` at build time. A literal
+    placeholder means the setting was never passed, which is indistinguishable
+    from a missing key and must not be accepted as an asset index.
+    """
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or "$(" in value:
+        return None
+    return value
+
+
+def packaged_asset_index(app: Path) -> str:
+    """The numeric asset index the packaged app declares, cross-checked by version.
+
+    An app without the version key predates the explicit profile and is the
+    default 26.1.2 line, which keeps its historical index. Any other version
+    must carry its own index: falling back would validate the wrong tree.
+    """
+    from game_versions import DEFAULT_VERSION, SUPPORTED_VERSIONS
+    info_path = Path(app) / "Info.plist"
+    info = {}
+    if info_path.is_file():
+        info = plistlib.loads(info_path.read_bytes())
+        if not isinstance(info, dict):
+            raise ValueError("Packaged Info.plist is not a dictionary: " + str(info_path))
+    version = _expanded(info.get("FAOTMinecraftVersion")) or DEFAULT_VERSION
+    if version not in SUPPORTED_VERSIONS:
+        raise ValueError("Packaged Minecraft version is not supported: " + repr(version))
+    expected = ASSET_INDEX_BY_VERSION.get(version)
+    if expected is None:
+        raise ValueError("No packaged asset index contract for Minecraft " + version)
+    index = _expanded(info.get("FAOTAssetIndex"))
+    if index is None:
+        if version != DEFAULT_VERSION:
+            raise ValueError("Minecraft " + version +
+                             " app must declare its own FAOTAssetIndex instead of the default")
+        return expected
+    if not ASSET_INDEX_ID.fullmatch(index):
+        raise ValueError("Invalid packaged asset index: " + repr(index))
+    if index != expected:
+        raise ValueError("Packaged asset index " + index + " does not belong to Minecraft " +
+                         version + " (expected " + expected + ")")
+    return index
+
+
 def validate_runtime(app: Path, renderer: str):
     from build_c0_harness import validate_dylib
     from mod_file_policy import is_metadata
@@ -51,8 +109,12 @@ def validate_runtime(app: Path, renderer: str):
         validate_shader_bundle(directory / "fabricaot-shaders", simulator=False)
         if not (directory / "fabricaot-present.metallib").stat().st_size:
             raise ValueError("Empty Metal presentation library")
-    if not (app / "assets/indexes/30.json").is_file():
-        raise ValueError("Missing Minecraft asset index 30")
+    index = packaged_asset_index(app)
+    index_path = app / "assets/indexes" / (index + ".json")
+    # The identifier is already numeric, so the path cannot escape; a symlink
+    # would still let the bundle point outside itself.
+    if index_path.is_symlink() or not index_path.is_file():
+        raise ValueError("Missing Minecraft asset index " + index)
     if not any((app / "assets/objects").glob("*/*")):
         raise ValueError("Missing Minecraft asset objects")
 
