@@ -163,7 +163,9 @@ python3 -B -m unittest discover -s tests -v
 - `.mrpack`、Prism 实例、Mod JAR、Gradle 构建脚本和 Mixin 插件都可能不可信。默认不执行未隔离的第三方构建代码，并限制 ZIP 路径、展开体积和下载来源。
 - 含 Minecraft 代码或资源的 IPA 仅供用户本机构建和安装，不作为公开 Release 或通用安装包分发。
 - 免费 Personal Team 的签名有效期和重装后的存档保留需要单独验证；工具不保存个人签名证书。
-- 仓库中的第一方代码目前没有附带开源许可证文件；复用或再分发前请先联系维护者确认授权。
+- iOS 控制层移植自 Amethyst-iOS（GPL-3.0），因此包含它的 App 以 GPL-3.0 分发，见仓库根 LICENSE 与
+  [控制层来源](ios/C0Harness/Control/NOTICE.md)。其余第一方代码未附带开源许可证；复用或再分发前
+  请先联系维护者确认授权。
 
 ## English overview
 

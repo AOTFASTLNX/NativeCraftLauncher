@@ -10,6 +10,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)pageRequestedLaunch;
 - (void)pageRequestedLayoutEditor;
 - (void)pageRequestedLayoutImport;
+- (void)pageRequestedLayoutEditorNamed:(NSString *)layoutName;
 - (void)pageAccountsChanged;
 - (BOOL)pageGameHasLaunched;
 - (void)pageSetGameStatus:(NSString *)status;

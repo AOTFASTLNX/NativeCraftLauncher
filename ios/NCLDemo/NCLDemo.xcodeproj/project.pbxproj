@@ -28,6 +28,32 @@
 		A20000000000000000000081 /* WorldUITests.m in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000082 /* WorldUITests.m */; };
 		A200000000000000000000A7 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* main.m */; };
 		A200000000000000000000A8 /* client-graph.dylib in Embed Native Runtime */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* client-graph.dylib */; };
+		E0000000000000000000001 /* ControlButton.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000001 /* ControlButton.m */; };
+		F0000000000000000000001 /* ControlButton.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000001 /* ControlButton.m */; };
+		E0000000000000000000002 /* ControlLayout.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000002 /* ControlLayout.m */; };
+		F0000000000000000000002 /* ControlLayout.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000002 /* ControlLayout.m */; };
+		E0000000000000000000003 /* ControlDrawer.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000003 /* ControlDrawer.m */; };
+		F0000000000000000000003 /* ControlDrawer.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000003 /* ControlDrawer.m */; };
+		E0000000000000000000004 /* ControlSubButton.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000004 /* ControlSubButton.m */; };
+		F0000000000000000000004 /* ControlSubButton.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000004 /* ControlSubButton.m */; };
+		E0000000000000000000005 /* ControlJoystick.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000005 /* ControlJoystick.m */; };
+		F0000000000000000000005 /* ControlJoystick.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000005 /* ControlJoystick.m */; };
+		E0000000000000000000006 /* CustomControlsUtils.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000006 /* CustomControlsUtils.m */; };
+		F0000000000000000000006 /* CustomControlsUtils.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000006 /* CustomControlsUtils.m */; };
+		E0000000000000000000007 /* CustomControlsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000007 /* CustomControlsViewController.m */; };
+		F0000000000000000000007 /* CustomControlsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000007 /* CustomControlsViewController.m */; };
+		E0000000000000000000008 /* DBNumberedSlider.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000008 /* DBNumberedSlider.m */; };
+		F0000000000000000000008 /* DBNumberedSlider.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000008 /* DBNumberedSlider.m */; };
+		E0000000000000000000009 /* FileListViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000009 /* FileListViewController.m */; };
+		F0000000000000000000009 /* FileListViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = D0000000000000000000009 /* FileListViewController.m */; };
+		E000000000000000000000A /* NSPredicateUtilitiesExternal.m in Sources */ = {isa = PBXBuildFile; fileRef = D000000000000000000000A /* NSPredicateUtilitiesExternal.m */; };
+		F000000000000000000000A /* NSPredicateUtilitiesExternal.m in Sources */ = {isa = PBXBuildFile; fileRef = D000000000000000000000A /* NSPredicateUtilitiesExternal.m */; };
+		E000000000000000000000B /* FAOTControlBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = D000000000000000000000B /* FAOTControlBridge.m */; };
+		F000000000000000000000B /* FAOTControlBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = D000000000000000000000B /* FAOTControlBridge.m */; };
+		E000000000000000000000C /* FAOTControlCompat.m in Sources */ = {isa = PBXBuildFile; fileRef = D000000000000000000000C /* FAOTControlCompat.m */; };
+		F000000000000000000000C /* FAOTControlCompat.m in Sources */ = {isa = PBXBuildFile; fileRef = D000000000000000000000C /* FAOTControlCompat.m */; };
+		E000000000000000000000D /* FAOTControlsView.m in Sources */ = {isa = PBXBuildFile; fileRef = D000000000000000000000D /* FAOTControlsView.m */; };
+		F000000000000000000000D /* FAOTControlsView.m in Sources */ = {isa = PBXBuildFile; fileRef = D000000000000000000000D /* FAOTControlsView.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -93,6 +119,33 @@
 		A20000000000000000000093 /* Info.WorldSimulator.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.WorldSimulator.plist; sourceTree = "<group>"; };
 		A200000000000000000000A6 /* FabricAOTWorld.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = FabricAOTWorld.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A200000000000000000000B3 /* WorldDevice.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = WorldDevice.xcconfig; sourceTree = "<group>"; };
+		D0000000000000000000001 /* ControlButton.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/ControlButton.m"; sourceTree = "<group>"; };
+		D0000000000000000000002 /* ControlLayout.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/ControlLayout.m"; sourceTree = "<group>"; };
+		D0000000000000000000003 /* ControlDrawer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/ControlDrawer.m"; sourceTree = "<group>"; };
+		D0000000000000000000004 /* ControlSubButton.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/ControlSubButton.m"; sourceTree = "<group>"; };
+		D0000000000000000000005 /* ControlJoystick.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/ControlJoystick.m"; sourceTree = "<group>"; };
+		D0000000000000000000006 /* CustomControlsUtils.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/CustomControlsUtils.m"; sourceTree = "<group>"; };
+		D0000000000000000000007 /* CustomControlsViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/CustomControlsViewController.m"; sourceTree = "<group>"; };
+		D0000000000000000000008 /* DBNumberedSlider.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/DBNumberedSlider.m"; sourceTree = "<group>"; };
+		D0000000000000000000009 /* FileListViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/FileListViewController.m"; sourceTree = "<group>"; };
+		D000000000000000000000A /* NSPredicateUtilitiesExternal.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/NSPredicateUtilitiesExternal.m"; sourceTree = "<group>"; };
+		D000000000000000000000B /* FAOTControlBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/FAOTControlBridge.m"; sourceTree = "<group>"; };
+		D000000000000000000000C /* FAOTControlCompat.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/FAOTControlCompat.m"; sourceTree = "<group>"; };
+		D000000000000000000000D /* FAOTControlsView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../C0Harness/Control/FAOTControlsView.m"; sourceTree = "<group>"; };
+		C0000000000000000000001 /* ControlButton.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../C0Harness/Control/ControlButton.h"; sourceTree = "<group>"; };
+		C0000000000000000000002 /* ControlLayout.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../C0Harness/Control/ControlLayout.h"; sourceTree = "<group>"; };
+		C0000000000000000000003 /* ControlDrawer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../C0Harness/Control/ControlDrawer.h"; sourceTree = "<group>"; };
+		C0000000000000000000004 /* ControlSubButton.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../C0Harness/Control/ControlSubButton.h"; sourceTree = "<group>"; };
+		C0000000000000000000005 /* ControlJoystick.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../C0Harness/Control/ControlJoystick.h"; sourceTree = "<group>"; };
+		C0000000000000000000006 /* CustomControlsUtils.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../C0Harness/Control/CustomControlsUtils.h"; sourceTree = "<group>"; };
+		C0000000000000000000007 /* CustomControlsViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../C0Harness/Control/CustomControlsViewController.h"; sourceTree = "<group>"; };
+		C0000000000000000000008 /* DBNumberedSlider.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../C0Harness/Control/DBNumberedSlider.h"; sourceTree = "<group>"; };
+		C0000000000000000000009 /* FileListViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../C0Harness/Control/FileListViewController.h"; sourceTree = "<group>"; };
+		C000000000000000000000A /* NSPredicateUtilitiesExternal.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../C0Harness/Control/NSPredicateUtilitiesExternal.h"; sourceTree = "<group>"; };
+		C000000000000000000000B /* FAOTControlBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../C0Harness/Control/FAOTControlBridge.h"; sourceTree = "<group>"; };
+		C000000000000000000000C /* FAOTControlCompat.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../C0Harness/Control/FAOTControlCompat.h"; sourceTree = "<group>"; };
+		C000000000000000000000D /* FAOTControlsView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../C0Harness/Control/FAOTControlsView.h"; sourceTree = "<group>"; };
+		C000000000000000000000E /* glfw_keycodes.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../C0Harness/Control/glfw_keycodes.h"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -109,6 +162,7 @@
 		A20000000000000000000031 = {
 			isa = PBXGroup;
 			children = (
+				A2000000000000000000D001 /* Control */,
 				A20000000000000000000011 /* main.m */,
 				A20000000000000000000900 /* FAOTControlLayout.h */,
 				A20000000000000000000901 /* FAOTControlLayout.m */,
@@ -145,6 +199,40 @@
 				A20000000000000000000083 /* WorldUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A2000000000000000000D001 /* Control */ = {
+			isa = PBXGroup;
+			children = (
+				D0000000000000000000001 /* ControlButton.m */,
+				D0000000000000000000002 /* ControlLayout.m */,
+				D0000000000000000000003 /* ControlDrawer.m */,
+				D0000000000000000000004 /* ControlSubButton.m */,
+				D0000000000000000000005 /* ControlJoystick.m */,
+				D0000000000000000000006 /* CustomControlsUtils.m */,
+				D0000000000000000000007 /* CustomControlsViewController.m */,
+				D0000000000000000000008 /* DBNumberedSlider.m */,
+				D0000000000000000000009 /* FileListViewController.m */,
+				D000000000000000000000A /* NSPredicateUtilitiesExternal.m */,
+				D000000000000000000000B /* FAOTControlBridge.m */,
+				D000000000000000000000C /* FAOTControlCompat.m */,
+				D000000000000000000000D /* FAOTControlsView.m */,
+				C0000000000000000000001 /* ControlButton.h */,
+				C0000000000000000000002 /* ControlLayout.h */,
+				C0000000000000000000003 /* ControlDrawer.h */,
+				C0000000000000000000004 /* ControlSubButton.h */,
+				C0000000000000000000005 /* ControlJoystick.h */,
+				C0000000000000000000006 /* CustomControlsUtils.h */,
+				C0000000000000000000007 /* CustomControlsViewController.h */,
+				C0000000000000000000008 /* DBNumberedSlider.h */,
+				C0000000000000000000009 /* FileListViewController.h */,
+				C000000000000000000000A /* NSPredicateUtilitiesExternal.h */,
+				C000000000000000000000B /* FAOTControlBridge.h */,
+				C000000000000000000000C /* FAOTControlCompat.h */,
+				C000000000000000000000D /* FAOTControlsView.h */,
+				C000000000000000000000E /* glfw_keycodes.h */,
+			);
+			name = Control;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -301,6 +389,19 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E0000000000000000000001 /* ControlButton.m in Sources */,
+				E0000000000000000000002 /* ControlLayout.m in Sources */,
+				E0000000000000000000003 /* ControlDrawer.m in Sources */,
+				E0000000000000000000004 /* ControlSubButton.m in Sources */,
+				E0000000000000000000005 /* ControlJoystick.m in Sources */,
+				E0000000000000000000006 /* CustomControlsUtils.m in Sources */,
+				E0000000000000000000007 /* CustomControlsViewController.m in Sources */,
+				E0000000000000000000008 /* DBNumberedSlider.m in Sources */,
+				E0000000000000000000009 /* FileListViewController.m in Sources */,
+				E000000000000000000000A /* NSPredicateUtilitiesExternal.m in Sources */,
+				E000000000000000000000B /* FAOTControlBridge.m in Sources */,
+				E000000000000000000000C /* FAOTControlCompat.m in Sources */,
+				E000000000000000000000D /* FAOTControlsView.m in Sources */,
 				A20000000000000000000001 /* main.m in Sources */,
 				A20000000000000000000902 /* FAOTControlLayout.m in Sources */,
 				A20000000000000000000906 /* FAOTControlsOverlay.m in Sources */,
@@ -325,6 +426,19 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F0000000000000000000001 /* ControlButton.m in Sources */,
+				F0000000000000000000002 /* ControlLayout.m in Sources */,
+				F0000000000000000000003 /* ControlDrawer.m in Sources */,
+				F0000000000000000000004 /* ControlSubButton.m in Sources */,
+				F0000000000000000000005 /* ControlJoystick.m in Sources */,
+				F0000000000000000000006 /* CustomControlsUtils.m in Sources */,
+				F0000000000000000000007 /* CustomControlsViewController.m in Sources */,
+				F0000000000000000000008 /* DBNumberedSlider.m in Sources */,
+				F0000000000000000000009 /* FileListViewController.m in Sources */,
+				F000000000000000000000A /* NSPredicateUtilitiesExternal.m in Sources */,
+				F000000000000000000000B /* FAOTControlBridge.m in Sources */,
+				F000000000000000000000C /* FAOTControlCompat.m in Sources */,
+				F000000000000000000000D /* FAOTControlsView.m in Sources */,
 				A200000000000000000000A7 /* main.m in Sources */,
 				A20000000000000000000903 /* FAOTControlLayout.m in Sources */,
 				A20000000000000000000907 /* FAOTControlsOverlay.m in Sources */,
@@ -470,6 +584,10 @@
 		A20000000000000000000073 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../C0Harness/Control",
+				);
 				ARCHS = arm64;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -504,6 +622,10 @@
 		A20000000000000000000074 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../C0Harness/Control",
+				);
 				ARCHS = arm64;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
