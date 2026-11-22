@@ -7,6 +7,8 @@
 #import "FAOTAuthService.h"
 #import "FAOTSkinView.h"
 #import "FAOTLauncherViewController.h"
+#import "FAOTControlBridge.h"
+#import <objc/runtime.h>
 #import <math.h>
 
 static NSString *const FAOTYggdrasilServerKey = @"FAOTYggdrasilServer";
@@ -286,6 +288,9 @@ static BOOL FAOTValidOfflineName(NSString *name) {
 @interface FAOTSettingsPageController ()
 @property (nonatomic, weak) id<FAOTLauncherPageHost> host;
 @property (nonatomic, strong) UILabel *layoutLabel;
+@property (nonatomic, strong) UIStackView *layoutList;
+@property (nonatomic, strong) UISlider *scaleSlider;
+@property (nonatomic, strong) UILabel *scaleCaption;
 @property (nonatomic, strong) UILabel *memoryCaption;
 @property (nonatomic, strong) UISegmentedControl *memoryPicker;
 @property (nonatomic, strong) UILabel *retentionCaption;
@@ -327,7 +332,7 @@ static BOOL FAOTValidOfflineName(NSString *name) {
     [stack addArrangedSubview:FAOTPageHeader(@"设置", @"")];
 
     self.layoutLabel = FAOTMakeLabel(@"default", 14, UIFontWeightMedium, FAOTPrimaryTextColor());
-    UIButton *edit = FAOTMakeButton(@"编辑按键", FAOTFieldColor(), FAOTPrimaryTextColor());
+    UIButton *edit = FAOTMakeButton(@"编辑当前布局", FAOTAccentColor(), FAOTDynamicColor(UIColor.whiteColor, UIColor.blackColor));
     UIButton *import = FAOTMakeButton(@"导入布局", FAOTFieldColor(), FAOTPrimaryTextColor());
     [edit addTarget:self action:@selector(editLayoutTapped) forControlEvents:UIControlEventTouchUpInside];
     [import addTarget:self action:@selector(importLayoutTapped) forControlEvents:UIControlEventTouchUpInside];
@@ -337,7 +342,21 @@ static BOOL FAOTValidOfflineName(NSString *name) {
     layoutActions.distribution = UIStackViewDistributionFillEqually;
     layoutActions.spacing = 8;
     UILabel *layoutCaption = FAOTMakeLabel(@"控制布局", 12, UIFontWeightMedium, FAOTMutedTextColor());
-    [stack addArrangedSubview:FAOTPaddedCard(FAOTMakeStack(@[layoutCaption, self.layoutLabel, layoutActions], 8), 14)];
+    self.layoutList = FAOTMakeStack(@[], 6);
+    UILabel *layoutHint = FAOTMakeLabel(@"点按切换布局，长按复制或删除。编辑器和游戏使用同一份 Pojav 布局文件。",
+                                        11, UIFontWeightRegular, FAOTMutedTextColor());
+    self.scaleSlider = [[UISlider alloc] initWithFrame:CGRectZero];
+    self.scaleSlider.minimumValue = 60.0f;
+    self.scaleSlider.maximumValue = 150.0f;
+    self.scaleSlider.continuous = YES;
+    self.scaleSlider.minimumTrackTintColor = FAOTAccentColor();
+    [self.scaleSlider addTarget:self action:@selector(controlScaleChanged:)
+               forControlEvents:UIControlEventValueChanged];
+    self.scaleCaption = FAOTMakeLabel(@"", 11, UIFontWeightRegular, FAOTSecondaryTextColor());
+    UILabel *scaleTitle = FAOTMakeLabel(@"按键大小", 12, UIFontWeightMedium, FAOTMutedTextColor());
+    [stack addArrangedSubview:FAOTPaddedCard(FAOTMakeStack(@[layoutCaption, self.layoutLabel, self.layoutList,
+                                                              layoutActions, scaleTitle, self.scaleSlider,
+                                                              self.scaleCaption, layoutHint], 10), 14)];
 
     self.memoryCaption = FAOTMakeLabel(FAOTLauncherSettings.shared.deviceMemoryCaption, 12, UIFontWeightRegular, FAOTSecondaryTextColor());
     NSMutableArray *memoryItems = [NSMutableArray array];
@@ -391,7 +410,11 @@ static BOOL FAOTValidOfflineName(NSString *name) {
 - (void)refreshPage {
     FAOTLauncherSettings *settings = FAOTLauncherSettings.shared;
     FAOTControlLayout *layout = [FAOTLauncherViewController activeLayout];
-    self.layoutLabel.text = [NSString stringWithFormat:@"%@ · %lu 个按键", settings.layoutName, (unsigned long)layout.controls.count];
+    self.layoutLabel.text = [NSString stringWithFormat:@"当前：%@ · %lu 个按键", settings.layoutName, (unsigned long)layout.controls.count];
+    [self reloadLayoutList];
+    self.scaleSlider.value = (float)FAOTControlButtonScale();
+    self.scaleCaption.text = [NSString stringWithFormat:@"%.0f%%（所有布局通用，进入游戏生效）",
+                              FAOTControlButtonScale()];
     NSInteger memory = settings.memoryGiB;
     NSArray<NSNumber *> *options = settings.memoryOptions;
     NSUInteger memoryIndex = 0;
@@ -459,6 +482,118 @@ static BOOL FAOTValidOfflineName(NSString *name) {
 
 - (void)editLayoutTapped { [self.host pageRequestedLayoutEditor]; }
 - (void)importLayoutTapped { [self.host pageRequestedLayoutImport]; }
+
+- (void)controlScaleChanged:(UISlider *)slider {
+    double value = round((double)slider.value / 5.0) * 5.0;
+    [NSUserDefaults.standardUserDefaults setDouble:value forKey:@"FAOTControlButtonScale"];
+    self.scaleCaption.text = [NSString stringWithFormat:@"%.0f%%（所有布局通用，进入游戏生效）", value];
+}
+
+#pragma mark - Layout management
+
+- (void)reloadLayoutList {
+    for (UIView *view in self.layoutList.arrangedSubviews.copy) {
+        [self.layoutList removeArrangedSubview:view];
+        [view removeFromSuperview];
+    }
+    NSString *active = FAOTLauncherSettings.shared.layoutName;
+    NSArray<NSDictionary *> *entries = FAOTControlMapEntries();
+    if (entries.count == 0) {
+        [self.layoutList addArrangedSubview:FAOTMakeLabel(@"还没有布局文件", 12, UIFontWeightRegular, FAOTMutedTextColor())];
+        return;
+    }
+    for (NSDictionary *entry in entries) {
+        NSString *name = entry[@"name"];
+        BOOL selected = [name isEqualToString:active];
+        UIButton *row = [UIButton buttonWithType:UIButtonTypeSystem];
+        row.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+        row.titleLabel.font = [UIFont systemFontOfSize:14 weight:selected ? UIFontWeightBold : UIFontWeightMedium];
+        [row setTitleColor:selected ? FAOTAccentColor() : FAOTPrimaryTextColor() forState:UIControlStateNormal];
+        [row setTitle:[NSString stringWithFormat:@"%@  %@", selected ? @"✓" : @"  ", name]
+             forState:UIControlStateNormal];
+        row.backgroundColor = selected ? FAOTFieldColor() : UIColor.clearColor;
+        row.layer.cornerRadius = 8;
+        NSLayoutConstraint *rowHeight = [row.heightAnchor constraintEqualToConstant:34];
+        rowHeight.active = YES;
+        [row addTarget:self action:@selector(layoutRowTapped:) forControlEvents:UIControlEventTouchUpInside];
+        objc_setAssociatedObject(row, @selector(layoutRowTapped:), name, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        UILongPressGestureRecognizer *hold = [[UILongPressGestureRecognizer alloc] initWithTarget:self
+                                                                                           action:@selector(layoutRowHeld:)];
+        [row addGestureRecognizer:hold];
+        [self.layoutList addArrangedSubview:row];
+    }
+}
+
+- (void)layoutRowTapped:(UIButton *)row {
+    NSString *name = objc_getAssociatedObject(row, @selector(layoutRowTapped:));
+    if (name.length == 0) return;
+    FAOTLauncherSettings.shared.layoutName = name;
+    FAOTControlSetActiveLayoutName(name);
+    self.statusLabel.text = [NSString stringWithFormat:@"已切换到布局 %@", name];
+    [self refreshPage];
+}
+
+- (void)layoutRowHeld:(UILongPressGestureRecognizer *)hold {
+    if (hold.state != UIGestureRecognizerStateBegan) return;
+    UIButton *row = (UIButton *)hold.view;
+    NSString *name = objc_getAssociatedObject(row, @selector(layoutRowTapped:));
+    if (name.length == 0) return;
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:name
+                                                                  message:nil
+                                                           preferredStyle:UIAlertControllerStyleActionSheet];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"编辑" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        [self.host pageRequestedLayoutEditorNamed:name];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"复制为新布局" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        [self promptForLayoutName:@"复制布局" initial:[name stringByAppendingString:@" 副本"] handler:^(NSString *target) {
+            if (FAOTControlDuplicateLayout(name, target)) {
+                FAOTLauncherSettings.shared.layoutName = target;
+                FAOTControlSetActiveLayoutName(target);
+                self.statusLabel.text = [NSString stringWithFormat:@"已复制为 %@", target];
+            } else {
+                self.statusLabel.text = @"复制失败";
+            }
+            [self refreshPage];
+        }];
+    }]];
+    if (![name isEqualToString:@"default"]) {
+        [sheet addAction:[UIAlertAction actionWithTitle:@"删除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
+            if (FAOTControlDeleteLayout(name)) {
+                if ([FAOTLauncherSettings.shared.layoutName isEqualToString:name]) {
+                    FAOTLauncherSettings.shared.layoutName = @"default";
+                    FAOTControlSetActiveLayoutName(@"default");
+                }
+                self.statusLabel.text = [NSString stringWithFormat:@"已删除 %@", name];
+            } else {
+                self.statusLabel.text = @"删除失败";
+            }
+            [self refreshPage];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.sourceView = row;
+    sheet.popoverPresentationController.sourceRect = row.bounds;
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)promptForLayoutName:(NSString *)title initial:(NSString *)initial handler:(void (^)(NSString *name))handler {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
+                                                                  message:@"只能使用字母、数字、空格、- 和 _"
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.text = initial; }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        NSString *name = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        NSCharacterSet *bad = [[NSCharacterSet characterSetWithCharactersInString:
+            @"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_"] invertedSet];
+        if (name.length == 0 || [name rangeOfCharacterFromSet:bad].location != NSNotFound) {
+            self.statusLabel.text = @"布局名称无效";
+            return;
+        }
+        handler(name);
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
 
 @end
 

@@ -6,6 +6,8 @@
 #import "FAOTLauncherPages.h"
 #import "FAOTLauncherTheme.h"
 #import "FAOTAccountStore.h"
+#import "FAOTControlBridge.h"
+#import "CustomControlsUtils.h"
 #include <unistd.h>
 #import <QuartzCore/QuartzCore.h>
 #import <CoreImage/CoreImage.h>
@@ -56,7 +58,9 @@ NSString *FAOTPojavDefaultLayoutJSON(void) {
             @"displayInMenu": @YES,
         }];
     }
-    NSDictionary *root = @{ @"version": @5, @"scaledAt": @100, @"mControlDataList": list };
+    NSDictionary *root = @{ @"version": @5, @"scaledAt": @100,
+                            @"mControlDataList": list, @"mDrawerDataList": @[],
+                            @"mJoystickDataList": @[] };
     NSData *data = [NSJSONSerialization dataWithJSONObject:root options:0 error:nil];
     return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"{}";
 }
@@ -145,12 +149,11 @@ static void FAOTUpdateLauncherBackdrop(CAGradientLayer *backdrop, UITraitCollect
 + (NSUserDefaults *)defaults { return NSUserDefaults.standardUserDefaults; }
 
 + (FAOTControlLayout *)activeLayout {
-    NSString *name = [[self defaults] stringForKey:FAOTControlLayoutDefaultsKey];
-    if (name.length == 0) name = @"default";
+    NSString *name = FAOTControlActiveLayoutName();
     FAOTControlLayout *layout = [FAOTControlLayout loadNamed:name];
     if (!layout) {
-        layout = [FAOTControlLayout defaultLayout];
-        [layout saveNamed:name error:nil];
+        NSData *data = [FAOTPojavDefaultLayoutJSON() dataUsingEncoding:NSUTF8StringEncoding];
+        layout = [FAOTControlLayout layoutFromPojavData:data error:nil] ?: [FAOTControlLayout defaultLayout];
     }
     return layout;
 }
@@ -160,6 +163,7 @@ static void FAOTUpdateLauncherBackdrop(CAGradientLayer *backdrop, UITraitCollect
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = FAOTBackgroundColor();
+    FAOTControlEnsureDefaults();
     [FAOTLogStore pruneToRetention:FAOTLauncherSettings.shared.logRetention];
     self.backdrop = [CAGradientLayer layer];
     FAOTUpdateLauncherBackdrop(self.backdrop, self.traitCollection);
@@ -610,7 +614,11 @@ static const CGFloat kTransitionBlurDrift = 22.0;
 }
 
 - (void)pageRequestedLayoutEditor {
-    NSString *layoutName = FAOTLauncherSettings.shared.layoutName;
+    [self pageRequestedLayoutEditorNamed:FAOTLauncherSettings.shared.layoutName];
+}
+
+- (void)pageRequestedLayoutEditorNamed:(NSString *)layoutName {
+    if (layoutName.length == 0) layoutName = FAOTControlActiveLayoutName();
     FAOTControlLayout *layout = [FAOTLauncherViewController activeLayout];
     __weak typeof(self) weakSelf = self;
     FAOTControlEditorViewController *editor =
