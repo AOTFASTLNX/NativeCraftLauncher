@@ -131,6 +131,10 @@ macOS 使用 Overlay 标题栏并隐藏原生标题文字，保留系统红黄�
 
 选择结果写入任务的 `loaderSelection`、暂存清单的 `mmc-pack.json` 与 `source.json`，并作为 AOT 缓存键的一部分，因此换版本不会复用旧镜像。旧环境若只准备了 0.19.3，选择 0.19.5 会要求重新准备环境，而不是静默回退。Loader 只在 Mac 构建期使用，iOS 运行时不加载它。该选择不改变 Minecraft 26.1.2 / Fabric 目标、文件完整性、合法路径、沙盒构建期转换、签名和最终产物校验；实际依赖解析、Mixin 或 AOT 错误会保留原始日志并将任务标记为失败。
 
+构建期 classpath 只保留所选版本的一套引擎 jar。客户端引用本身还带着基线 Loader，若不剔除，Knot 会以「duplicate fabric loader classes found on classpath」中止。剔除范围按锁文件的全部已验证版本计算，因此同一份引用在任一选择下都只有一套 Loader/Mixin。
+
+2026-11-22 对照：同一 221 个 Mod 的整合包分别以 0.19.3 与 0.19.5 完成准备阶段（exit 0），两边兼容性报告均为 141 个 Mod、0 阻塞、0 fatal，逐 Mod 状态无差异。fancymenu 的两处 Mixin 注入在 0.19.5 下报 WARN 级失败并跳过，不影响导出；该现象仍需真机确认，准备阶段通过不等于可玩。
+
 ## 2026-11-15 验证
 
 日志与截图：artifacts/desktop-rewrite/。

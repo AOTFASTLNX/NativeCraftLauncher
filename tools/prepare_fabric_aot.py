@@ -19,7 +19,7 @@ from bootstrap_toolchain import sha256
 from capture import ROOT, capture
 from mod_file_policy import content_paths, is_metadata, mod_candidates
 from prepare_b0 import jar_bytes, select_libraries
-from loader_selection import default_version, engine_libraries, verified
+from loader_selection import all_engine_libraries, default_version, engine_libraries, verified
 from run_b0_reference import execute, require_run, sandbox_policy
 from renderer_profile import DEFAULT_RENDERER, RENDERERS
 from artifact_copy import copy_artifact
@@ -431,6 +431,20 @@ def verify_pack_classpath(client, expected_entries, *, layered=True):
             raise ValueError("Classpath pack index includes an ambiguous or inactive path")
 
 
+def row_bytes(row):
+    """Byte size of a prepared engine row.
+
+    Preparation records the inventory size under "size"; the lock file calls the
+    same number "bytes". Accept either so a prepared report is not rejected just
+    because the two sides spell the field differently.
+    """
+    for key in ("size", "bytes"):
+        value = row.get(key)
+        if isinstance(value, int):
+            return value
+    return None
+
+
 def load_reference(prepared, loader=None):
     report = json.loads((prepared / "result.json").read_text())
     home = Path(report["javaHome"])
@@ -456,7 +470,7 @@ def load_reference(prepared, loader=None):
                 raise ValueError(f"Prepared engine set differs from the lock file for Loader {loader}")
             for row in engine_rows:
                 pinned = by_name[row.get("file") or Path(row["path"]).name]
-                if row.get("sha256") != pinned["sha256"] or row.get("bytes") != pinned["bytes"]:
+                if row.get("sha256") != pinned["sha256"] or row_bytes(row) != pinned["bytes"]:
                     raise ValueError(f"Prepared engine hash differs from the lock file: {pinned['file']}")
             engine = select_libraries({"jars": engine_rows}, lock, None)
             libraries = [Path(row["path"]) for row in report["referenceLibraries"]]
@@ -474,7 +488,7 @@ def load_reference(prepared, loader=None):
         raise ValueError(f"Prepared engine set differs from the lock file for Loader {loader}")
     for row in engine_rows:
         pinned = by_name[row.get("file") or Path(row["path"]).name]
-        if row.get("sha256") != pinned["sha256"] or row.get("bytes") != pinned["bytes"]:
+        if row.get("sha256") != pinned["sha256"] or row_bytes(row) != pinned["bytes"]:
             raise ValueError(f"Prepared engine hash differs from the lock file: {pinned['file']}")
     engine = select_libraries({"jars": engine_rows}, lock, loader)
     libraries = [Path(row["path"]) for row in report["referenceLibraries"]]
@@ -525,6 +539,17 @@ def build_fixture(prepared, output):
     (mods / "mcfao-fixture.jar").write_bytes(jar_bytes(contents))
 
 
+def knot_classpath(engine, libraries, lock):
+    """Engine jars first, then the reference libraries with every engine copy removed.
+
+    The client reference carries the baseline Loader alongside the one that was
+    selected, and Knot aborts when two fabric-loader jars share a classpath. Drop
+    every version pinned by any Loader, not only the selected one.
+    """
+    engine_names = {row["file"] for row in all_engine_libraries(lock)}
+    return [*engine, *(p for p in libraries if p.name not in engine_names)]
+
+
 def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer=DEFAULT_RENDERER,
             loader=None):
     home, libraries, engine, report = load_reference(prepared, loader)
@@ -548,9 +573,8 @@ def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer
     from mod_file_policy import clean_staged_metadata
     clean_staged_metadata(work / 'game/mods')
     inventory = inspect_archives(roots, work, metadata_only=not audited)
-    # Use only the pinned Loader/ASM/Mixin copies ahead of the vanilla reference.
-    engine_names = {p.name for p in engine}
-    classpath = [*engine, *(p for p in libraries if p.name not in engine_names)]
+    classpath = knot_classpath(
+        engine, libraries, json.loads((ROOT / "compiler/fabric.lock.json").read_text()))
     classes = work / "classes"
     # Classes that replace run-time generated Mod code implement Mod APIs, so they compile
     # against the Mod jars and never enter the tool's own classpath. Keeping the two compilations
