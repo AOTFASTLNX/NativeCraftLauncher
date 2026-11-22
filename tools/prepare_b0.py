@@ -12,6 +12,7 @@ from pathlib import Path
 from bootstrap_toolchain import sha256
 from capture import ROOT, capture
 from mod_file_policy import content_paths, is_metadata
+from loader_selection import engine_libraries, verified
 
 
 def jar_bytes(files: dict[str, bytes]) -> bytes:
@@ -29,9 +30,20 @@ def jar_bytes(files: dict[str, bytes]) -> bytes:
     return stream.getvalue()
 
 
-def select_libraries(inventory: dict, lock: dict) -> list[dict]:
+def loader_engines(lock: dict, loader: str | None = None) -> list[dict]:
+    """Engine jars for one verified Loader, or the legacy single-version list."""
+    if loader is not None:
+        return engine_libraries(lock, loader)
+    return lock["engineLibraries"]
+
+
+def verified_loaders(lock: dict) -> list[str]:
+    return verified(lock)
+
+
+def select_libraries(inventory: dict, lock: dict, loader: str | None = None) -> list[dict]:
     selected = []
-    for expected in lock["engineLibraries"]:
+    for expected in loader_engines(lock, loader):
         matches = [entry for entry in inventory["jars"] if Path(entry["path"]).name == expected["file"]]
         if len(matches) != 1:
             raise ValueError("ambiguous/missing pinned engine library: " + expected["file"])
@@ -72,7 +84,6 @@ def main(argv=None):
     home = args.graalvm_home.resolve(strict=True)
     lock = json.loads((ROOT / "compiler/fabric.lock.json").read_text())
     inventory, shared_meta = preparation_inputs(args.client_dir, args.baseline)
-    engine = select_libraries(inventory, lock)
     output = args.output.absolute()
     output.mkdir(parents=True, exist_ok=False)
     classes = output / "classes"
@@ -80,6 +91,35 @@ def main(argv=None):
     fixture = ROOT / "interop/b0"
     sources = sorted(p for p in content_paths(fixture) if p.suffix == ".java"
                      and p.relative_to(fixture).parts[0] in ("src", "bootstrap"))
+    versions = verified_loaders(lock)
+    drivers = {}
+    for version in versions:
+        engine = select_libraries(inventory, lock, version)
+        version_dir = output / "loaders" / version
+        version_classes = version_dir / "classes"
+        version_classes.mkdir(parents=True)
+        command = [str(home / "bin/javac"), "--release", "25", "-proc:none", "-cp",
+                   os.pathsep.join(entry["path"] for entry in engine), "-d", str(version_classes),
+                   *map(str, sources)]
+        result = capture(command, version_dir / "compile", 180)
+        if result["exitCode"] or result["timedOut"]:
+            print(json.dumps(result, indent=2))
+            return 1
+        compiled = {str(path.relative_to(version_classes)): path.read_bytes()
+                    for path in content_paths(version_classes) if path.suffix == ".class"}
+        bootstrap = {name: data for name, data in compiled.items()
+                     if name.startswith("fabricaot/b0/bootstrap/")}
+        bootstrap["META-INF/MANIFEST.MF"] = b"Manifest-Version: 1.0\r\nPremain-Class: fabricaot.b0.bootstrap.CaptureAgent\r\n\r\n"
+        (version_dir / "driver.jar").write_bytes(jar_bytes(bootstrap))
+        drivers[version] = {"engineLibraries": [
+                                {**row, "file": Path(row["path"]).name} for row in engine],
+                            "driver": {"bytes": (version_dir / "driver.jar").stat().st_size,
+                                       "sha256": sha256(version_dir / "driver.jar")}}
+    # The shared fixture is byte-identical across Loaders; compile it once against the default
+    # engine so the audited B0 evidence keeps referring to one fixture.
+    engine = select_libraries(inventory, lock)
+    # The legacy engine list carries file names so older readers keep working.
+    engine = [{**row, "file": Path(row["path"]).name} for row in engine]
     command = [str(home / "bin/javac"), "--release", "25", "-proc:none", "-cp",
                os.pathsep.join(entry["path"] for entry in engine), "-d", str(classes), *map(str, sources)]
     result = capture(command, output / "compile", 180)
@@ -116,6 +156,7 @@ def main(argv=None):
                 "scope": "compiled first-party fixture only; no Loader/Mod initializer/test run",
                 "javaHome": str(home), "javaSHA256": sha256(home / "bin/java"),
                 "engineLibraries": engine, "referenceLibraries": libraries,
+                "verifiedLoaders": versions, "loaderDrivers": drivers,
                 "binaries": {name: {"bytes": (output / name).stat().st_size, "sha256": sha256(output / name)}
                              for name in ("fixture.jar", "nested.jar", "driver.jar")},
                 "inputsSHA256": inputs}

@@ -173,6 +173,8 @@ def prepare(root, paths, home, client, game, sdk, update, write_json):
     if not (jdk / HEADER_DIR / 'java_lang_System.h').is_file():
         update(stage='headers', message='正在生成 OpenJDK JNI 头文件')
         prepare_headers(root, cache, home, jdk, logs, run)
+    # prepare_b0 compiles one driver per verified Loader and records both the
+    # engine set and the driver hash for each, so nothing is rewritten here.
     prepared = stage('prepared', '正在准备 Minecraft 编译输入',
                      lambda out: script('prepare_b0', out, '--graalvm-home', home, '--client-dir', client), 'result.json')
     runtime = stage('runtime', '正在编译 iOS Java 运行库',

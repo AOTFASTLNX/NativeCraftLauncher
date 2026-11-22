@@ -19,6 +19,7 @@ from bootstrap_toolchain import sha256
 from capture import ROOT, capture
 from mod_file_policy import content_paths, is_metadata, mod_candidates
 from prepare_b0 import jar_bytes, select_libraries
+from loader_selection import default_version, engine_libraries, verified
 from run_b0_reference import execute, require_run, sandbox_policy
 from renderer_profile import DEFAULT_RENDERER, RENDERERS
 from artifact_copy import copy_artifact
@@ -430,18 +431,76 @@ def verify_pack_classpath(client, expected_entries, *, layered=True):
             raise ValueError("Classpath pack index includes an ambiguous or inactive path")
 
 
-def load_reference(prepared):
+def load_reference(prepared, loader=None):
     report = json.loads((prepared / "result.json").read_text())
     home = Path(report["javaHome"])
     if sha256(home / "bin/java") != report["javaSHA256"]:
         raise ValueError("Prepared Java changed")
     lock = json.loads((ROOT / "compiler/fabric.lock.json").read_text())
-    engine = select_libraries({"jars": report["engineLibraries"]}, lock)
+    if loader is None:
+        engine_rows = report["engineLibraries"]
+    else:
+        drivers = report.get("loaderDrivers")
+        if not isinstance(drivers, dict) or loader not in drivers:
+            # An environment prepared before multi-Loader support has only the
+            # baseline engine set and driver. Keep it usable for that baseline;
+            # any other version needs a fresh preparation.
+            if loader != default_version(lock):
+                raise ValueError(f"Prepared environment has no driver for Fabric Loader {loader}; "
+                                 "rerun the environment preparation")
+            engine_rows = report["engineLibraries"]
+            expected = lock["engineLibraries"]
+            by_name = {row["file"]: row for row in expected}
+            reported = {row.get("file") or Path(row["path"]).name for row in engine_rows}
+            if reported != set(by_name):
+                raise ValueError(f"Prepared engine set differs from the lock file for Loader {loader}")
+            for row in engine_rows:
+                pinned = by_name[row.get("file") or Path(row["path"]).name]
+                if row.get("sha256") != pinned["sha256"] or row.get("bytes") != pinned["bytes"]:
+                    raise ValueError(f"Prepared engine hash differs from the lock file: {pinned['file']}")
+            engine = select_libraries({"jars": engine_rows}, lock, None)
+            libraries = [Path(row["path"]) for row in report["referenceLibraries"]]
+            for row, path in zip(report["referenceLibraries"], libraries, strict=True):
+                if sha256(path) != row["sha256"]:
+                    raise ValueError(f"Prepared reference changed: {path}")
+            return home, libraries, [Path(row["path"]) for row in engine], report
+        engine_rows = drivers[loader]["engineLibraries"]
+    # Verify the reported engine rows against the lock file for this Loader, so a prepared
+    # environment cannot smuggle in a different Loader jar or Mixin version.
+    expected = engine_libraries(lock, loader) if loader else lock["engineLibraries"]
+    by_name = {row["file"]: row for row in expected}
+    reported = {row.get("file") or Path(row["path"]).name for row in engine_rows}
+    if reported != set(by_name):
+        raise ValueError(f"Prepared engine set differs from the lock file for Loader {loader}")
+    for row in engine_rows:
+        pinned = by_name[row.get("file") or Path(row["path"]).name]
+        if row.get("sha256") != pinned["sha256"] or row.get("bytes") != pinned["bytes"]:
+            raise ValueError(f"Prepared engine hash differs from the lock file: {pinned['file']}")
+    engine = select_libraries({"jars": engine_rows}, lock, loader)
     libraries = [Path(row["path"]) for row in report["referenceLibraries"]]
     for row, path in zip(report["referenceLibraries"], libraries, strict=True):
         if sha256(path) != row["sha256"]:
             raise ValueError(f"Prepared reference changed: {path}")
     return home, libraries, [Path(row["path"]) for row in engine], report
+
+
+def loader_driver(prepared, report, loader):
+    """The per-Loader driver jar and its expected hash."""
+    drivers = report.get("loaderDrivers")
+    if not isinstance(drivers, dict) or loader not in drivers:
+        lock = json.loads((ROOT / "compiler/fabric.lock.json").read_text())
+        if loader == default_version(lock) and (prepared / "driver.jar").is_file():
+            record = report["binaries"]["driver.jar"]
+            if sha256(prepared / "driver.jar") != record["sha256"]:
+                raise ValueError("Sandbox control driver changed")
+            return prepared / "driver.jar", record["sha256"]
+        raise ValueError(f"Prepared environment has no driver for Fabric Loader {loader}; "
+                         "rerun the environment preparation")
+    record = drivers[loader].get("driver")
+    path = prepared / "loaders" / loader / "driver.jar"
+    if not isinstance(record, dict) or not path.is_file() or sha256(path) != record.get("sha256"):
+        raise ValueError(f"Fabric Loader {loader} sandbox driver is missing or changed")
+    return path, record["sha256"]
 
 
 def compile_java(home, classpath, sources, classes, log):
@@ -466,8 +525,9 @@ def build_fixture(prepared, output):
     (mods / "mcfao-fixture.jar").write_bytes(jar_bytes(contents))
 
 
-def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer=DEFAULT_RENDERER):
-    home, libraries, engine, report = load_reference(prepared)
+def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer=DEFAULT_RENDERER,
+            loader=None):
+    home, libraries, engine, report = load_reference(prepared, loader)
     if client not in libraries or client.name != "26.1.2.jar":
         raise ValueError("The input must be the verified owned client in the prepared manifest")
     work = output / "work"
@@ -504,9 +564,12 @@ def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer
         runtime_classes = work / "runtime-classes"
         compile_java(home, [*classpath, client, *mod_files(work / "game/mods")],
                      runtime_sources, runtime_classes, output / "compile-runtime")
-    driver = prepared / "driver.jar"
-    if sha256(driver) != report["binaries"]["driver.jar"]["sha256"]:
-        raise ValueError("Sandbox control driver changed")
+    if loader is None:
+        driver = prepared / "driver.jar"
+        if sha256(driver) != report["binaries"]["driver.jar"]["sha256"]:
+            raise ValueError("Sandbox control driver changed")
+    else:
+        driver, _ = loader_driver(prepared, report, loader)
     java = [str(home / "bin/java"), "-XX:+DisableAttachMechanism", "-XX:-UsePerfData",
             "-Xmx1g", "-Djava.awt.headless=true", f"-Duser.home={work / 'home'}",
             f"-Djava.io.tmpdir={work / 'tmp'}"]
@@ -550,7 +613,9 @@ def prepare(prepared, client, mods, output, audited, trace_agent=False, renderer
     metadata = json.loads(parsed.read_text())
     for row, (_, origin, _, _) in zip(metadata, inventory, strict=True):
         row["path"] = origin
-    record = {"status": "FABRIC_METADATA_PARSED", "loader": "0.19.3", "namespace": "official",
+    lock = json.loads((ROOT / "compiler/fabric.lock.json").read_text())
+    record = {"status": "FABRIC_METADATA_PARSED",
+              "loader": loader or default_version(lock), "namespace": "official",
               "modSHA256": hashes, "mods": metadata, "renderer": renderer,
               "runtimeOverlays": {"compiled": [p.relative_to(TOOL).as_posix() for p in runtime_sources],
                                   "skipped": overlay_skipped}}
@@ -719,6 +784,8 @@ def main(argv=None):
     parser.add_argument("--trace-agent", action="store_true",
                         help="Collect bounded GraalVM tracing metadata during the sandboxed audited export")
     parser.add_argument("--renderer", choices=RENDERERS, default=os.environ.get("FAOT_RENDERER", DEFAULT_RENDERER))
+    parser.add_argument("--loader", choices=verified(json.loads((ROOT / "compiler/fabric.lock.json").read_text())),
+                        help="Verified Fabric Loader to build against (default: the lock file's baseline)")
     parser.add_argument("--compatibility-report", type=Path)
     args = parser.parse_args(argv)
     if args.renderer not in RENDERERS:
@@ -734,7 +801,7 @@ def main(argv=None):
             build_fixture(args.prepared.resolve(), output)
         else:
             prepare(args.prepared.resolve(), args.client.resolve(), args.mods.resolve(), output,
-                    args.audited_mods, args.trace_agent, args.renderer)
+                    args.audited_mods, args.trace_agent, args.renderer, args.loader)
     except (ValueError, OSError, KeyError, TypeError, RuntimeError, zipfile.BadZipFile) as error:
         failure = {
             "schemaVersion": 1, "policy": "REPORT_ONLY",

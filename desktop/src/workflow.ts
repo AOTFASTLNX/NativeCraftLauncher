@@ -20,6 +20,7 @@ export interface BuildForm {
   iconBackground?: string;
   iconPadding?: number;
   testVersion?: string;
+  loaderVersion?: string;
   resourceSelection: ResourceSelection | null;
   existingBuild?: string;
   workspace: string;
@@ -30,7 +31,6 @@ export interface BuildForm {
   loader: "fabric" | "vanilla";
   source: string;
   team: string;
-  forceCompile: boolean;
   quickBuild?: boolean;
 }
 type CompatibilityStage = "PASS" | "FAIL" | "SKIPPED" | "UNVERIFIED";
@@ -108,6 +108,12 @@ export interface BuildJob {
   log?: string;
   signature?: string;
   warning?: string;
+  loaderSelection?: {
+    version: string;
+    automatic: boolean;
+    declared?: string | null;
+    note?: string;
+  };
   compatibility?: AotCompatibility;
   compatibilityOverrides?: {
     code: string;
@@ -150,6 +156,7 @@ export interface Bootstrap {
   bundled?: boolean;
   setup?: SetupState;
   storage?: StoragePaths;
+  loaders?: { version: string; label: string }[];
   workspace: string;
   config: string;
   exportOptions: string;
@@ -165,6 +172,7 @@ export const defaultForm: BuildForm = {
   iconBackground: "transparent",
   iconPadding: 0,
   testVersion: "",
+  loaderVersion: "auto",
   resourceSelection: null,
   workspace: "",
   python: "",
@@ -174,7 +182,6 @@ export const defaultForm: BuildForm = {
   loader: "fabric",
   source: "",
   team: "",
-  forceCompile: false,
   quickBuild: false,
 };
 export const configurationFields = [
@@ -483,10 +490,13 @@ export function restoreForm(raw: string | null): BuildForm {
     throw new Error("快速构建选项无效");
   result.quickBuild = value.quickBuild === true;
   result.loader = value.loader === "vanilla" ? "vanilla" : "fabric";
+  result.loaderVersion =
+    value.loaderVersion === "0.19.3" || value.loaderVersion === "0.19.5"
+      ? value.loaderVersion
+      : "auto";
   // The game source is a per-visit choice: a stored pack must never preselect
   // the next build. The field is accepted for older records and ignored.
   result.source = "";
-  result.forceCompile = false;
   return result;
 }
 export function mergeJob(jobs: BuildJob[], next: BuildJob): BuildJob[] {
