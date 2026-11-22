@@ -395,6 +395,7 @@ class WorkbenchTests(unittest.TestCase):
 
     def test_failed_stage_reports_only_its_own_output(self):
         # A retry appends to the same log. An earlier exclusion message must not
+        # A retry appends to the same log. An earlier exclusion message must not
         # mask the real reason a later stage failed.
         (self.root/'fixture.stderr.log').write_text(
             'mcfao build: Requested Fabric instance contains excluded Mods; review /x.\n')
@@ -750,5 +751,31 @@ class WorkbenchTests(unittest.TestCase):
         with patch.object(w, 'storage_paths', return_value=dict(cache=self.root, builds=self.root, jobs=jobs, rust=self.root)):
             result = w.bootstrap(workspace)
         self.assertEqual(result['config'], str(older))
+
+    def test_run_job_staging_reads_the_workspace_from_the_request(self):
+        """The worker is a separate process: it has no closure over the caller's locals.
+
+        Staging used to pass a bare workspace name that only existed in the launching
+        frame, so every Fabric job failed at the source stage with a NameError before any
+        work started.
+        """
+        import ast
+        source = (Path(w.__file__)).read_text()
+        function = next(node for node in ast.walk(ast.parse(source))
+                        if isinstance(node, ast.FunctionDef) and node.name == 'run_job')
+        assigned = {node.id for node in ast.walk(function)
+                    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)}
+        assigned |= {arg.arg for node in ast.walk(function) if isinstance(node, ast.arg)
+                     for arg in [node]}
+        self.assertNotIn('workspace', assigned)
+        # Every staging call inside the worker must resolve the workspace explicitly.
+        calls = [node for node in ast.walk(function) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == 'stage_source']
+        self.assertTrue(calls)
+        for call in calls:
+            keywords = {keyword.arg for keyword in call.keywords}
+            self.assertIn('workspace', keywords)
+            value = next(keyword.value for keyword in call.keywords if keyword.arg == 'workspace')
+            self.assertIsInstance(value, ast.Call, 'the worker must call workspace_path(...)')
 
 if __name__=='__main__': unittest.main()

@@ -1189,7 +1189,7 @@ def run_job(path):
                     expected = {name: digest for name, digest in record['filesSHA256'].items() if not is_metadata(name)}
                     if actual != expected: raise ValueError('暂存内容发生变化，请新建构建')
                     mods = game / 'mods'
-                else: mods, game = stage_source(resolve(request['source']), source, lambda s: print(s, flush=True), lambda: CANCELLED or (folder / 'cancel').exists(), selection=request.get('resourceSelection'), loader_version=request.get('fabricLoaderVersion'), version=request.get('minecraftVersion'), recommended_ids=request.get('recommendedResources'), workspace=workspace)
+                else: mods, game = stage_source(resolve(request['source']), source, lambda s: print(s, flush=True), lambda: CANCELLED or (folder / 'cancel').exists(), selection=request.get('resourceSelection'), loader_version=request.get('fabricLoaderVersion'), version=request.get('minecraftVersion'), recommended_ids=request.get('recommendedResources'), workspace=workspace_path(request['workspace']))
                 update(compatibilityOverrides=read_json(source / 'source.json').get('compatibilityOverrides', []))
                 update(sourceFolder=str(source))
             execute([*command, 'doctor', '--renderer', 'gl41', '--config', resolve(request['config'])], folder, 'doctor', update, 'doctor', env)
