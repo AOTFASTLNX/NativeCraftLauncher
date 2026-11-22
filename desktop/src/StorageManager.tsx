@@ -14,6 +14,7 @@ import {
   percent,
   selectedBytes,
   storageRoles,
+  type CleanupPlan,
   type StoragePlan,
 } from "./storageManagement";
 import { AnimatedNumber } from "./MotionPrimitives";
@@ -58,6 +59,9 @@ export interface ScanProgressView {
 
 export function StorageManager({
   plan,
+  cleanup,
+  cleanupError,
+  cleanupLoading,
   busy,
   available,
   active,
@@ -72,6 +76,9 @@ export function StorageManager({
   onReveal,
 }: {
   plan: StoragePlan | null;
+  cleanup: CleanupPlan | null;
+  cleanupError: string;
+  cleanupLoading: boolean;
   busy: string;
   available: boolean;
   active: boolean;
@@ -100,6 +107,15 @@ export function StorageManager({
       plan?.usage?.some((row) => row.role === current) ? current : "",
     );
   }, [plan]);
+  // A refreshed cleanup plan can drop a category (an IPA appeared, a job
+  // started); stale ids would otherwise still count toward the total.
+  useEffect(() => {
+    setChoices((old) => {
+      const ids = cleanup?.groups.map((group) => group.id) || [];
+      const kept = old.filter((id) => ids.includes(id));
+      return kept.length === old.length ? old : kept;
+    });
+  }, [cleanup]);
   useEffect(() => {
     if (confirm) dialog.current?.showModal();
   }, [confirm]);
@@ -108,7 +124,9 @@ export function StorageManager({
   const filtered = usage.filter((row) => !volume || row.volumeId === volume);
   const current = filtered.find((row) => row.role === role) || filtered[0];
   const total = filtered.reduce((sum, row) => sum + row.bytes, 0);
-  const selected = plan ? selectedBytes(plan, choices) : 0;
+  const groups = cleanup?.groups || [];
+  const blocked = !!cleanup?.blocked;
+  const selected = selectedBytes(groups, choices);
   const scanning = !!scan;
   const disabled = !available || !!busy;
 
@@ -145,7 +163,9 @@ export function StorageManager({
         <div className="sm-progress" role="status" aria-live="polite">
           <div className="sm-progress-title">
             <LoaderCircle size={15} className="spin" aria-hidden="true" />
-            <strong>{scan.phase === "queued" ? "等待扫描进程" : "正在扫描"}</strong>
+            <strong>
+              {scan.phase === "queued" ? "等待扫描进程" : "正在扫描"}
+            </strong>
             <span>
               已读取 {scan.files.toLocaleString("zh-CN")} 个文件 ·{" "}
               {scan.dirs.toLocaleString("zh-CN")} 个目录
@@ -195,9 +215,19 @@ export function StorageManager({
             </div>
             <div>
               <span>可清理空间</span>
-              <strong>{size(plan.reclaimBytes)}</strong>
+              <strong>
+                {cleanup
+                  ? size(cleanup.reclaimBytes)
+                  : cleanupLoading
+                    ? "统计中"
+                    : "—"}
+              </strong>
               <small>
-                {plan.blocked ? "当前自动清理不可用" : "按清理规则保留交付产物"}
+                {blocked
+                  ? "当前自动清理不可用"
+                  : cleanupError
+                    ? "清理统计未能读取"
+                    : "按清理规则保留交付产物"}
               </small>
             </div>
             <div>
@@ -430,19 +460,25 @@ export function StorageManager({
               </div>
               <ShieldCheck size={21} aria-hidden="true" />
             </div>
-            {(plan.blocked || active) && (
+            {cleanupError && (
+              <p className="sm-feedback" role="alert">
+                {cleanupError}
+              </p>
+            )}
+            {(blocked || active) && (
               <p className="sm-feedback">
                 {active
                   ? "有任务正在运行，完成或取消后才能清理。"
-                  : plan.reason || "有构建任务正在运行，完成或取消后才能清理。"}
+                  : cleanup?.reason ||
+                    "有构建任务正在运行，完成或取消后才能清理。"}
               </p>
             )}
-            {plan.groups.map((group) => (
+            {groups.map((group) => (
               <div className="sm-cleanup-group" key={group.id}>
                 <label>
                   <input
                     type="checkbox"
-                    disabled={disabled || plan.blocked || active}
+                    disabled={disabled || blocked || active}
                     checked={choices.includes(group.id)}
                     onChange={(e) =>
                       setChoices((old) =>
@@ -474,7 +510,10 @@ export function StorageManager({
                 </details>
               </div>
             ))}
-            {!plan.groups.length && !plan.blocked && (
+            {!groups.length && !blocked && cleanupLoading && (
+              <p className="sm-help">正在统计可清理内容…</p>
+            )}
+            {!groups.length && !blocked && !cleanupLoading && cleanup && (
               <p className="sm-help">没有符合规则的可清理内容。</p>
             )}
             <div className="sm-cleanup-footer">
@@ -484,7 +523,7 @@ export function StorageManager({
               </span>
               <button
                 className="danger"
-                disabled={disabled || active || plan.blocked || !choices.length}
+                disabled={disabled || active || blocked || !choices.length}
                 onClick={() => setConfirm(true)}
               >
                 <Trash2 size={15} aria-hidden="true" />
@@ -523,7 +562,7 @@ export function StorageManager({
             。将删除所选缓存或构建阶段；IPA、构建记录与证据目录保留。
           </p>
           <ul>
-            {plan.groups
+            {groups
               .filter((g) => choices.includes(g.id))
               .map((g) => (
                 <li key={g.id}>
@@ -542,7 +581,7 @@ export function StorageManager({
             </button>
             <button
               className="danger"
-              disabled={disabled || active || plan.blocked}
+              disabled={disabled || active || blocked}
               onClick={() => {
                 setConfirm(false);
                 onClean(choices);

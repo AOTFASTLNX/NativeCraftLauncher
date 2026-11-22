@@ -112,6 +112,7 @@ import {
 import { NativeDependencies, DependencyTask } from "./NativeDependencies";
 import { jobStateName, type DependencyInventory } from "./workflow";
 import { StorageManager } from "./StorageManager";
+import { PageBoundary } from "./PageBoundary";
 import { useStorageScan } from "./useStorageScan";
 import {
   StorageChangeDialog,
@@ -138,6 +139,7 @@ import {
 import {
   formatBytes as size,
   unifiedStoragePaths,
+  type CleanupPlan,
   type StoragePlan,
 } from "./storageManagement";
 import { dragVerdict, dropMessage } from "./dropTarget";
@@ -821,6 +823,12 @@ export default function App() {
   const [refresh, setRefresh] = useState(0);
   const [reset, setReset] = useState(false);
   const [storage, setStorage] = useState<StoragePlan | null>(null);
+  // Usage and cleanup are separate answers: the cached snapshot renders in a
+  // millisecond, while the cleanup preview re-validates the filesystem.
+  const [cleanup, setCleanup] = useState<CleanupPlan | null>(null);
+  const [cleanupLoading, setCleanupLoading] = useState(false);
+  const [cleanupError, setCleanupError] = useState("");
+  const cleanupGeneration = useRef(0);
   const [storageDone, setStorageDone] = useState("");
   useEffect(() => {
     setStorage(null);
@@ -1070,6 +1078,36 @@ export default function App() {
     if (!storageScan.plan) return;
     setStorage(storageScan.plan);
   }, [storageScan.plan]);
+  // The cleanup preview walks the live filesystem, so it never rides along with
+  // the cached usage snapshot. A failure here leaves the usage page intact.
+  async function loadCleanup() {
+    if (!native) return;
+    const generation = ++cleanupGeneration.current;
+    setCleanupLoading(true);
+    setCleanupError("");
+    try {
+      const plan = await workbench<CleanupPlan>(
+        formRef.current,
+        "storage-plan",
+      );
+      if (cleanupGeneration.current !== generation) return;
+      setCleanup({
+        reclaimBytes: plan.reclaimBytes ?? 0,
+        groups: plan.groups ?? [],
+        blocked: !!plan.blocked,
+        reason: plan.reason,
+      });
+    } catch (e) {
+      if (cleanupGeneration.current !== generation) return;
+      setCleanupError(String(e).replace(/^Error: /, ""));
+    } finally {
+      if (cleanupGeneration.current === generation) setCleanupLoading(false);
+    }
+  }
+  useEffect(() => {
+    if (!storage || page !== "storage") return;
+    void loadCleanup();
+  }, [storage, page]);
   async function resetStorageDirectories() {
     await attempt("正在重置目录设置", async () => {
       const result = await workbench<{
@@ -1166,6 +1204,7 @@ export default function App() {
       // The deletion invalidates every cached size; read the committed snapshot
       // and let the next visit trigger its own refresh.
       await storageScan.reload();
+      await loadCleanup();
     });
   }
   async function attempt<T>(
@@ -3177,82 +3216,87 @@ export default function App() {
               </div>
             )}
             {visiblePage === "storage" && (
-              <StorageManager
-                plan={storage}
-                busy={busy}
-                available={native}
-                active={
-                  !!active || ["queued", "running"].includes(setup?.state || "")
-                }
-                done={storageDone}
-                scan={storageScan.scanning ? storageScan.progress : null}
-                scanError={storageScan.error}
-                scanMessage={storageScan.message}
-                onScan={storageScan.rescan}
-                onCancelScan={() => void storageScan.cancel()}
-                onClean={(groups) => void cleanStorage(groups)}
-                onReveal={(path) =>
-                  void attempt("正在打开 Finder", async () => {
-                    await revealPath(path);
-                  })
-                }
-                locations={
-                  <>
-                    {(
-                      [
-                        ["cache", "编译缓存目录"],
-                        ["builds", "构建产物根目录"],
-                        ["jobs", "任务记录目录"],
-                        ["rust", "Rust 缓存目录"],
-                      ] as const
-                    ).map(([key, label]) => (
-                      <PathField
-                        key={key}
-                        label={label}
-                        directory
-                        value={storagePaths[key]}
-                        onChange={(v) =>
-                          setStoragePaths((p) => ({ ...p, [key]: v }))
-                        }
-                      />
-                    ))}
-                    <div className="sm-location-save">
-                      <button
-                        className="button secondary"
-                        disabled={
-                          !native ||
-                          !!busy ||
-                          !!active ||
-                          ["queued", "running"].includes(setup?.state || "")
-                        }
-                        onClick={() =>
-                          void attempt("正在保存存储位置", async () => {
-                            const result = await workbench<{
-                              ready: boolean;
-                            }>(
-                              formRef.current,
-                              "save-storage",
-                              undefined,
-                              storagePaths,
-                            );
-                            update({ output: storagePaths.builds });
-                            setStorage(null);
-                            setStorageDone("");
-                            setStorageStatus(
-                              result.ready
-                                ? "存储位置已保存，空间预检通过。现有数据未迁移。"
-                                : "存储位置已保存，剩余空间不足，请更换目录后再构建。",
-                            );
-                          })
-                        }
-                      >
-                        保存存储位置并检查空间
-                      </button>
-                      {storageStatus && <p role="status">{storageStatus}</p>}
-                    </div>
-                  </>
-                }
-              />
+              <PageBoundary key="storage" title="存储管理">
+                <StorageManager
+                  plan={storage}
+                  cleanup={cleanup}
+                  cleanupError={cleanupError}
+                  cleanupLoading={cleanupLoading}
+                  busy={busy}
+                  available={native}
+                  active={
+                    !!active || ["queued", "running"].includes(setup?.state || "")
+                  }
+                  done={storageDone}
+                  scan={storageScan.scanning ? storageScan.progress : null}
+                  scanError={storageScan.error}
+                  scanMessage={storageScan.message}
+                  onScan={storageScan.rescan}
+                  onCancelScan={() => void storageScan.cancel()}
+                  onClean={(groups) => void cleanStorage(groups)}
+                  onReveal={(path) =>
+                    void attempt("正在打开 Finder", async () => {
+                      await revealPath(path);
+                    })
+                  }
+                  locations={
+                    <>
+                      {(
+                        [
+                          ["cache", "编译缓存目录"],
+                          ["builds", "构建产物根目录"],
+                          ["jobs", "任务记录目录"],
+                          ["rust", "Rust 缓存目录"],
+                        ] as const
+                      ).map(([key, label]) => (
+                        <PathField
+                          key={key}
+                          label={label}
+                          directory
+                          value={storagePaths[key]}
+                          onChange={(v) =>
+                            setStoragePaths((p) => ({ ...p, [key]: v }))
+                          }
+                        />
+                      ))}
+                      <div className="sm-location-save">
+                        <button
+                          className="button secondary"
+                          disabled={
+                            !native ||
+                            !!busy ||
+                            !!active ||
+                            ["queued", "running"].includes(setup?.state || "")
+                          }
+                          onClick={() =>
+                            void attempt("正在保存存储位置", async () => {
+                              const result = await workbench<{
+                                ready: boolean;
+                              }>(
+                                formRef.current,
+                                "save-storage",
+                                undefined,
+                                storagePaths,
+                              );
+                              update({ output: storagePaths.builds });
+                              setStorage(null);
+                              setStorageDone("");
+                              setStorageStatus(
+                                result.ready
+                                  ? "存储位置已保存，空间预检通过。现有数据未迁移。"
+                                  : "存储位置已保存，剩余空间不足，请更换目录后再构建。",
+                              );
+                            })
+                          }
+                        >
+                          保存存储位置并检查空间
+                        </button>
+                        {storageStatus && <p role="status">{storageStatus}</p>}
+                      </div>
+                    </>
+                  }
+                />
+              </PageBoundary>
             )}
             {visiblePage === "settings" && (
               <section className="settings-page">

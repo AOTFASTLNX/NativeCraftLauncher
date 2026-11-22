@@ -189,6 +189,7 @@ macOS 使用 Overlay 标题栏并隐藏原生标题文字，保留系统红黄�
 - **后台任务**：`storage-scan-start` 启动独立进程（`start_new_session`，stdout/stderr 落到 `storage-scan/worker.log`），进度写 `storage-scan/<task>.json`，取消写 `<task>.cancel` 并发送 SIGTERM。重复点击复用正在运行的任务；取消或不完整的结果**从不**写入快照与索引。前端用代际号丢弃旧工作空间或已取消任务的迟到结果，切换页面不会终止扫描。
 - **主动失效**：构建结束（无论成功、失败或取消）与清理完成后，`storage_service.invalidate` 会删除相关目录的索引行，下一次刷新重新统计这些路径。它只删除缓存条目，不产生任何数字。
 - **清理安全不变**：`apply()` 不复用缓存，重新计算计划、重新验证每个目标仍在数据根内、不是受保护文件、不是符号链接，并对旧构建目录再做一次 IPA 检查；统计缓存只影响展示。
+- **占用与清理分离（2026-11-22）**：`storage-snapshot` 只有 `usage`/`volumes`/`managedBytes` 等占用字段，清理分组来自单独的 `storage-plan`。页面先用快照渲染占用，再异步加载清理计划；清理请求失败只影响「空间清理」区域。此前页面直接渲染 `plan.groups`，快照缺少该字段时整页白屏。存储页另由 `PageBoundary` 兜底页面级渲染异常。
 
 实测（本机 macOS arm64、Python 3.11，`python3 -B tools/storage_benchmark.py --root artifacts`，3 次中位数；基准脚本不包裹 syscall，元数据调用单列统计）：
 

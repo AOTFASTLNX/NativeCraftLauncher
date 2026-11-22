@@ -4,7 +4,7 @@ import {
   percent,
   selectedBytes,
   unifiedStoragePaths,
-  type StoragePlan,
+  type StorageGroup,
 } from "./storageManagement";
 
 describe("storage chart quantities", () => {
@@ -24,13 +24,11 @@ describe("storage chart quantities", () => {
     expect(formatBytes(1024 ** 3)).toBe("1.0 GiB");
   });
   it("totals only selected known cleanup categories once", () => {
-    const plan = {
-      groups: [
-        { id: "cache", bytes: 1024 },
-        { id: "builds", bytes: 2048 },
-      ],
-    } as StoragePlan;
-    expect(selectedBytes(plan, ["cache", "cache", "unknown"])).toBe(1024);
-    expect(selectedBytes(plan, [])).toBe(0);
+    const groups = [
+      { id: "cache", bytes: 1024 },
+      { id: "builds", bytes: 2048 },
+    ] as StorageGroup[];
+    expect(selectedBytes(groups, ["cache", "cache", "unknown"])).toBe(1024);
+    expect(selectedBytes(groups, [])).toBe(0);
   });
 });

@@ -37,11 +37,12 @@ export interface StorageVolume {
 }
 export interface StoragePlan {
   status: string;
-  dataRoot: string;
-  freeBytes: number;
-  reclaimBytes: number;
-  groups: StorageGroup[];
-  blocked: boolean;
+  dataRoot?: string;
+  freeBytes?: number;
+  /** Present only on a cleanup plan; a usage snapshot has no cleanup data. */
+  reclaimBytes?: number;
+  groups?: StorageGroup[];
+  blocked?: boolean;
   reason?: string;
   usage?: StorageUsage[];
   volumes?: StorageVolume[];
@@ -61,6 +62,14 @@ export interface StoragePlan {
   complete?: boolean;
   walked?: number;
   reused?: number;
+}
+
+/** The cleanup half of the page, fetched separately from the usage snapshot. */
+export interface CleanupPlan {
+  reclaimBytes: number;
+  groups: StorageGroup[];
+  blocked: boolean;
+  reason?: string;
 }
 export const storageRoles: Record<string, string> = {
   cache: "编译缓存",
@@ -98,8 +107,11 @@ export function problemRoles(plan: StoragePlan | null): StorageUsage[] {
   );
 }
 
-export function selectedBytes(plan: StoragePlan, choices: string[]): number {
-  return plan.groups
+export function selectedBytes(
+  groups: StorageGroup[],
+  choices: string[],
+): number {
+  return groups
     .filter((g) => choices.includes(g.id))
     .reduce((sum, g) => sum + g.bytes, 0);
 }
