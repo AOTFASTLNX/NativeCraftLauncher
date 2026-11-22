@@ -77,6 +77,17 @@ static int smokeEnqueue(void *window, int kind, double a, double b, int c, int d
         [launcher presentViewController:editor animated:NO completion:^{
             [editor.view layoutIfNeeded];
             if (editor.ctrlView.subviews.count != legacy.controls.count) abort();
+            UIImageView *reference = [editor valueForKey:@"referenceImageView"];
+            if (!reference || reference.userInteractionEnabled || reference.superview != editor.view ||
+                [editor.view.subviews indexOfObject:reference] >= [editor.view.subviews indexOfObject:editor.ctrlView]) abort();
+            reference.image = [UIImage new];
+            [editor.ctrlView removeAllButtons];
+            if (!reference.image || reference.superview != editor.view) abort();
+            [editor performSelector:NSSelectorFromString(@"loadControlFile:") withObject:name];
+            if (!reference.image || editor.ctrlView.subviews.count != legacy.controls.count) abort();
+            [editor performSelector:NSSelectorFromString(@"clearReferenceImage")];
+            if (reference.image) abort();
+            NSLog(@"CONTROL_EDITOR_REFERENCE_LAYER_PASS");
             ControlButton *moved = (ControlButton *)editor.ctrlView.subviews.firstObject;
             CGRect originalFrame = moved.frame;
             CGRect movedFrame = CGRectOffset(originalFrame, 20, 10);

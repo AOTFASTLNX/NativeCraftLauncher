@@ -1,4 +1,5 @@
 #import "CustomControlsViewController.h"
+#import <PhotosUI/PhotosUI.h>
 #import "DBNumberedSlider.h"
 #import "FileListViewController.h"
 #import "FAOTControlCompat.h"
@@ -14,13 +15,15 @@
 // Nothing
 @end
 
-@interface CustomControlsViewController () <UIGestureRecognizerDelegate, UIPopoverPresentationControllerDelegate>{
+@interface CustomControlsViewController () <UIGestureRecognizerDelegate, UIPopoverPresentationControllerDelegate, PHPickerViewControllerDelegate>{
 }
 
 @property(nonatomic) NSString* currentFileName;
 @property(nonatomic) CGRect selectedPoint;
 @property(nonatomic) UINavigationBar* navigationBar;
 @property(nonatomic) UIStackView *editorToolbar;
+@property(nonatomic) UIImageView *referenceImageView;
+@property(nonatomic) NSUInteger referenceImageGeneration;
 
 @end
 
@@ -52,6 +55,11 @@
     guideLabel.text = @"点按控件编辑 · 拖动移动 · 拖动圆形手柄缩放";
     [self.view addSubview:guideLabel]; 
 
+    self.referenceImageView = [[UIImageView alloc] initWithFrame:self.view.bounds];
+    self.referenceImageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.referenceImageView.contentMode = UIViewContentModeScaleAspectFit;
+    self.referenceImageView.userInteractionEnabled = NO;
+    [self.view addSubview:self.referenceImageView];
     self.ctrlView = [[ControlLayout alloc] initWithFrame:getSafeArea(self.view.bounds)];
     self.ctrlView.layer.borderColor = UIColor.labelColor.CGColor;
     [self.view addSubview:self.ctrlView];
@@ -110,6 +118,8 @@
         [UIAction actionWithTitle:@"添加按键" image:nil identifier:nil handler:^(__kindof UIAction *a) { [weakSelf addAtCenter:@selector(actionMenuAddButton)]; }],
         [UIAction actionWithTitle:@"添加摇杆" image:nil identifier:nil handler:^(__kindof UIAction *a) { [weakSelf addAtCenter:@selector(actionMenuAddJoystick)]; }],
         [UIAction actionWithTitle:@"添加抽屉" image:nil identifier:nil handler:^(__kindof UIAction *a) { [weakSelf addAtCenter:@selector(actionMenuAddDrawer)]; }],
+        [UIAction actionWithTitle:@"导入参考图" image:nil identifier:nil handler:^(__kindof UIAction *a) { [weakSelf importReferenceImage]; }],
+        [UIAction actionWithTitle:@"清除参考图" image:nil identifier:nil handler:^(__kindof UIAction *a) { [weakSelf clearReferenceImage]; }],
         [UIAction actionWithTitle:@"调整安全区" image:nil identifier:nil handler:^(__kindof UIAction *a) { [weakSelf actionMenuSafeArea]; }],
         [UIAction actionWithTitle:@"载入布局" image:nil identifier:nil handler:^(__kindof UIAction *a) { [weakSelf actionMenuLoad]; }]
     ]];
@@ -128,6 +138,53 @@
         [self.editorToolbar.widthAnchor constraintEqualToConstant:300],
         [self.editorToolbar.widthAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.widthAnchor constant:-16]
     ]];
+}
+
+- (void)importReferenceImage {
+    PHPickerConfiguration *configuration = [[PHPickerConfiguration alloc] init];
+    configuration.filter = [PHPickerFilter imagesFilter];
+    configuration.selectionLimit = 1;
+    PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:configuration];
+    picker.delegate = self;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)clearReferenceImage {
+    self.referenceImageGeneration++;
+    self.referenceImageView.image = nil;
+}
+
+- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
+    [picker dismissViewControllerAnimated:YES completion:^{
+        if (results.count != 0) [self loadReferenceImageFromProvider:results.firstObject.itemProvider];
+    }];
+}
+
+- (void)loadReferenceImageFromProvider:(NSItemProvider *)provider {
+    NSUInteger generation = ++self.referenceImageGeneration;
+    __weak typeof(self) weakSelf = self;
+    if (![provider canLoadObjectOfClass:UIImage.class]) {
+        [self showReferenceImageError];
+        return;
+    }
+    [provider loadObjectOfClass:UIImage.class completionHandler:^(id<NSItemProviderReading> image, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf || generation != strongSelf.referenceImageGeneration) return;
+            if (error || ![image isKindOfClass:UIImage.class]) {
+                [strongSelf showReferenceImageError];
+                return;
+            }
+            strongSelf.referenceImageView.image = (UIImage *)image;
+        });
+    }];
+}
+
+- (void)showReferenceImageError {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"无法导入参考图"
+        message:@"图片加载失败，请重新选择。" preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)addAtCenter:(SEL)action {

@@ -609,6 +609,8 @@
 				);
 				OTHER_LDFLAGS = (
 					"-framework",
+					PhotosUI,
+					"-framework",
 					UIKit,
 					"-framework",
 					Foundation,
@@ -647,6 +649,8 @@
 					"@executable_path/Frameworks",
 				);
 				OTHER_LDFLAGS = (
+					"-framework",
+					PhotosUI,
 					"-framework",
 					UIKit,
 					"-framework",
@@ -692,6 +696,8 @@
 					"@executable_path/Frameworks",
 				);
 				OTHER_LDFLAGS = (
+					"-framework",
+					PhotosUI,
 					"-framework",
 					UIKit,
 					"-framework",
@@ -748,6 +754,8 @@
 				);
 				OTHER_LDFLAGS = (
 					"-framework",
+					PhotosUI,
+					"-framework",
 					UIKit,
 					"-framework",
 					Foundation,
@@ -791,6 +799,8 @@
 					"@executable_path/Frameworks",
 				);
 				OTHER_LDFLAGS = (
+					"-framework",
+					PhotosUI,
 					"-framework",
 					UIKit,
 					"-framework",
