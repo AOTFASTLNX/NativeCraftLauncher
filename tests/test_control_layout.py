@@ -90,11 +90,13 @@ class ControlInputTests(unittest.TestCase):
 
 class ControlEditorTests(unittest.TestCase):
     def test_undo_implementation_is_in_both_xcode_targets(self):
-        project = (ROOT / "ios/C0Harness/C0Harness.xcodeproj/project.pbxproj").read_text(encoding="utf-8")
-        for prefix in ("E", "F"):
-            build_id = prefix + "000000000000000000000E"
-            self.assertRegex(project, rf"{build_id} /\* CustomControlsViewController\+UndoManager.m in Sources \*/ = ")
-            self.assertRegex(project, rf"{build_id} /\* CustomControlsViewController\+UndoManager.m in Sources \*/, ".rstrip())
+        for project_path in ("ios/C0Harness/C0Harness.xcodeproj/project.pbxproj",
+                             "ios/NCLDemo/NCLDemo.xcodeproj/project.pbxproj"):
+            project = (ROOT / project_path).read_text(encoding="utf-8")
+            for prefix in ("E", "F"):
+                build_id = prefix + "000000000000000000000E"
+                self.assertRegex(project, rf"{build_id} /\* CustomControlsViewController\+UndoManager.m in Sources \*/ = ")
+                self.assertRegex(project, rf"{build_id} /\* CustomControlsViewController\+UndoManager.m in Sources \*/,")
 
     def test_editor_is_the_ported_amethyst_controller(self):
         self.assertIn("@interface FAOTControlEditorViewController : CustomControlsViewController",
