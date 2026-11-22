@@ -30,6 +30,24 @@ const states = {
   unsafe: "不安全路径",
   unsupported: "暂不支持导入",
 };
+/** The retention shown in the step heading and the resource list. */
+export function resourceRetention(
+  report: Report | null,
+  selection: ResourceSelection | null,
+) {
+  if (!report?.resources || !report.resources_fingerprint) return null;
+  const valid =
+    selection?.source === report.source &&
+    selection.fingerprint === report.resources_fingerprint;
+  return {
+    kept: new Set(
+      valid
+        ? selection.included
+        : report.resources.filter((r) => r.default_selected).map((r) => r.id),
+    ),
+    total: report.resources.length,
+  };
+}
 export default function ResourceManager({
   report,
   selection,
@@ -53,11 +71,7 @@ export default function ResourceManager({
   const valid =
     selection?.source === report.source &&
     selection.fingerprint === report.resources_fingerprint;
-  const kept = new Set(
-    valid
-      ? selection.included
-      : rows.filter((r) => r.default_selected).map((r) => r.id),
-  );
+  const kept = resourceRetention(report, selection)!.kept;
   const categoryRows = rows.filter(
     (r) => category === "all" || r.category === category,
   );
@@ -102,17 +116,6 @@ export default function ResourceManager({
   }
   return (
     <section className="resource-manager" aria-label="整合包资源管理">
-      <div className="resource-summary">
-        <strong>
-          已保留 <AnimatedNumber value={kept.size} /> /{" "}
-          <AnimatedNumber value={rows.length} /> 项
-        </strong>
-        <span>取消勾选仅影响本次构建，原整合包文件保持完整。</span>
-      </div>
-      <p className="mod-list-hint">
-        材质包和光影包按所选文件保留；保留光影包不代表当前渲染器支持启用光影。可选
-        Mod 由你选择，下载后的依赖与重复版本仍需检查。
-      </p>
       <div className="resource-categories" aria-label="资源分类">
         {[["all", "全部"], ...Object.entries(resourceCategories)].map(
           ([key, label]) => (
@@ -167,11 +170,6 @@ export default function ResourceManager({
             </button>
           ))}
         </div>
-        <p className="mod-list-hint">
-          必需 /
-          可选依据整合包清单的客户端声明；包内和本地资源未声明时列为待确认。
-          分级不代表 iOS 兼容性，必需项仍可手动排除。
-        </p>
       </div>
       {excludedRequired.length > 0 && (
         <div className="resource-required-warning" role="status">
@@ -205,7 +203,7 @@ export default function ResourceManager({
       </div>
       <div className="resource-actions">
         <button className="text-button" onClick={() => batch(true)}>
-          保留当前列表
+          全选当前列表
         </button>
         <button className="text-button" onClick={() => batch(false)}>
           排除当前列表
