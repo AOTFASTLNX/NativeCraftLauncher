@@ -289,6 +289,20 @@ test("resource management offers a verified Fabric Loader choice", async ({
   );
   expect(saved.loaderVersion).toBe("0.19.5");
   await expect(page.locator(".select-popup")).toBeHidden();
+  const row = await page.evaluate(() => {
+    const label = document.querySelector(".resource-loader .resource-filter-label")!;
+    const menu = document.querySelector(".resource-loader .select-menu")!;
+    const container = document.querySelector(".resource-loader")!;
+    return {
+      label: label.getBoundingClientRect().toJSON(),
+      menu: menu.getBoundingClientRect().toJSON(),
+      container: container.getBoundingClientRect().toJSON(),
+    };
+  });
+  // Label stays on the left, the picker sits against the right edge.
+  expect(row.label.left - row.container.left).toBeLessThan(8);
+  expect(row.container.right - row.menu.right).toBeLessThan(8);
+  expect(row.menu.left).toBeGreaterThan(row.label.right + 40);
   await page.screenshot({
     path: "test-results/loader-choice.png",
     fullPage: false,
