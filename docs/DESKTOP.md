@@ -135,6 +135,23 @@ macOS 使用 Overlay 标题栏并隐藏原生标题文字，保留系统红黄�
 
 2026-11-22 对照：同一 221 个 Mod 的整合包分别以 0.19.3 与 0.19.5 完成准备阶段（exit 0），两边兼容性报告均为 141 个 Mod、0 阻塞、0 fatal，逐 Mod 状态无差异。fancymenu 的两处 Mixin 注入在 0.19.5 下报 WARN 级失败并跳过，不影响导出；该现象仍需真机确认，准备阶段通过不等于可玩。
 
+## 推荐资源
+
+资源管理页的「推荐资源」列出 NCL 验证过的可选 Mod，勾选后从 cdn.modrinth.com 下载并加入本次构建。清单在 `compiler/recommended-resources.json`，每个条目固定到具体文件、字节数与 SHA-512，版本不会漂移；整合包已自带的文件保留原样，只补缺失项。依赖按条目声明一并加入，例如 TouchController 会带上 Fabric Language Kotlin。
+
+### TouchController 的构建期适配
+
+TouchController 是 Kotlin + Compose 模组，直接加入会在两处被闭世界拒绝，两处都在构建期解决：
+
+1. **kotlin-reflect**：Fabric Language Kotlin 把 kotlin-reflect 作为嵌套库发布，只为自己的 `KotlinAdapter` 解析 `adapter: kotlin` 入口点。这个决策在镜像组装时完成，生成的钩子记录了结果，运行时没有任何路径再调用反射实现。因此 `BUILD_TIME_NESTED_LIBRARIES` 把它整体跳过；模组本身使用的 `KClass`/`KProperty` 接口定义在 kotlin-stdlib 中，不受影响。
+2. **iOS Transport**：模组自带 iOS 平台实现，但 `Transport` 的 `init`/`receive`/`send` 是 native 方法，需要宿主提供符号。闭世界镜像无法携带 native 方法，所以导出时把这三个方法改写为委托 `mcfao/aot/IosTransport`。消息编解码仍是模组自己的代码——`ProxyMessage` 的 40 种类型、`LargeMessageWrappedPlatform` 的分片逻辑都不改动。`mcfao/aot/TouchHost` 是默认宿主，把光标与键盘消息接到输入桥。
+
+其余平台的传输层（Android、Wayland、Win32、nativebridge）在 iOS 上不可达，native 方法被替换为中性的空实现；`PlatformProvider` 里的桌面 `System.load` 同样被替换，`isIos()` 判定与 iOS 分支保持原样。
+
+嵌套库按 Minecraft 版本过滤：模组为每条游戏线各带一份子 Jar，声明其他版本的在构建期跳过（TouchController 保留 28 个适用归档、剔除 19 个），与 Loader 自己的选择一致。同一份代码出现在多个嵌套 Jar 时按首次定义保留并记录。
+
+2026-11-22 验证：含 TouchController 的整合包完成准备阶段（`FABRIC_AOT_INPUT_PREPARED`），8 个模块全部 `TRANSFORMED`，产物 `client.jar` 含 `IosTransport` 与 `TouchHost`。仍未验证的是真机运行：触控映射的实际手感、光标坐标的缩放与屏幕旋转都待设备确认。
+
 ## 2026-11-15 验证
 
 日志与截图：artifacts/desktop-rewrite/。

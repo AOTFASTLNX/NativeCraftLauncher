@@ -778,6 +778,177 @@ final class RuntimeLowering implements Opcodes {
         adaptations.add(node.name + "#getModMetadata name/version=build snapshot");
     }
 
+    /**
+     * Redirects TouchController's iOS transport onto the host bridge.
+     *
+     * <p>The Mod ships an iOS platform whose three entry points are native methods. A closed-world
+     * image cannot carry a native method, and the host app is what would have to supply the symbol
+     * on a normal build. Rewriting the bodies keeps everything above the transport - message
+     * framing, the 40 message types, the large-message split - as the Mod's own code, which is why
+     * this replaces three methods instead of reimplementing the platform.
+     */
+    static final String IOS_TRANSPORT = "top/fifthlight/touchcontroller/common/platform/ios/Transport";
+    static final String IOS_TRANSPORT_HOST = "mcfao/aot/IosTransport";
+    static final String PLATFORM_PROVIDER =
+            "top/fifthlight/touchcontroller/common/platform/provider/PlatformProvider";
+    /**
+     * The native-library branch of the platform provider.
+     *
+     * <p>The provider checks isIos first and returns the iOS platform, so this branch is only
+     * reached on a desktop host. It calls System.load on an extracted .so/.dll, which a closed
+     * world cannot express and iOS never runs. Returning null is the same answer the provider
+     * already handles when extraction fails, so the caller falls through to its next candidate
+     * instead of the image refusing to build over dead code.
+     */
+    static final String PLATFORM_NATIVE_BRANCH =
+            "loadPlatform$touchcontroller_common_platform_provider_provider";
+    /**
+     * Transport layers for platforms this image cannot run on.
+     *
+     * <p>TouchController ships one transport per host system and picks one at run time from
+     * {@code os.name}. Their native methods are unreachable on iOS, but a native declaration is a
+     * hard stop for a closed-world image, so each is replaced with the neutral answer its own
+     * caller already handles: a zero-length read, a discarded write, and a zero handle.
+     */
+    static final Set<String> UNREACHABLE_TRANSPORTS = Set.of(
+            "top/fifthlight/touchcontroller/common/platform/android/Transport",
+            "top/fifthlight/touchcontroller/common/platform/nativebridge/Interface",
+            "top/fifthlight/touchcontroller/common/platform/wayland/Interface",
+            "top/fifthlight/touchcontroller/common/platform/win32/Interface",
+            "top/fifthlight/touchcontroller/proxy/client/nativebridge/NativeInterface");
+
+    static void lowerIosTransport(ClassNode node, List<String> adaptations) {
+        if (!node.name.equals(IOS_TRANSPORT)) return;
+        boolean rewritten = false;
+        for (var method : node.methods) {
+            if ((method.access & ACC_NATIVE) == 0) continue;
+            if (method.name.equals("init") && method.desc.equals("()V")) {
+                method.instructions.clear();
+                method.tryCatchBlocks.clear();
+                method.localVariables = null;
+                method.instructions.add(new InsnNode(RETURN));
+                method.maxStack = 0;
+                method.maxLocals = 1;
+            } else if (method.name.equals("receive") && method.desc.equals("([B)I")) {
+                method.instructions.clear();
+                method.tryCatchBlocks.clear();
+                method.localVariables = null;
+                method.instructions.add(new VarInsnNode(ALOAD, 0));
+                method.instructions.add(new MethodInsnNode(INVOKESTATIC, IOS_TRANSPORT_HOST,
+                        "receive", "([B)I", false));
+                method.instructions.add(new InsnNode(IRETURN));
+                method.maxStack = 1;
+                method.maxLocals = 1;
+            } else if (method.name.equals("send") && method.desc.equals("([BII)V")) {
+                method.instructions.clear();
+                method.tryCatchBlocks.clear();
+                method.localVariables = null;
+                method.instructions.add(new VarInsnNode(ALOAD, 0));
+                method.instructions.add(new VarInsnNode(ILOAD, 1));
+                method.instructions.add(new VarInsnNode(ILOAD, 2));
+                method.instructions.add(new MethodInsnNode(INVOKESTATIC, IOS_TRANSPORT_HOST,
+                        "send", "([BII)V", false));
+                method.instructions.add(new InsnNode(RETURN));
+                method.maxStack = 3;
+                method.maxLocals = 3;
+            } else {
+                continue;
+            }
+            method.access &= ~ACC_NATIVE;
+            rewritten = true;
+            adaptations.add(node.name + "#" + method.name + method.desc
+                    + " = host bridge (no JNI)");
+        }
+        if (!rewritten) {
+            throw new IllegalArgumentException("TouchController transport had no native method to lower");
+        }
+    }
+
+    /**
+     * Gives the other host transports the neutral body their caller already expects.
+     *
+     * <p>Each method keeps its descriptor and loses ACC_NATIVE, so a call resolves and returns the
+     * "nothing available" value: zero bytes read, zero handle, discarded write. This is only safe
+     * because the platform provider never selects these on iOS; the point is to keep an
+     * unreachable declaration from failing the whole image.
+     */
+    static void lowerUnreachableTransport(ClassNode node, List<String> adaptations) {
+        if (!UNREACHABLE_TRANSPORTS.contains(node.name)) return;
+        int lowered = 0;
+        for (var method : node.methods) {
+            if ((method.access & ACC_NATIVE) == 0) continue;
+            var body = method.instructions;
+            body.clear();
+            method.tryCatchBlocks.clear();
+            method.localVariables = null;
+            var returns = Type.getReturnType(method.desc);
+            switch (returns.getSort()) {
+                case Type.VOID -> body.add(new InsnNode(RETURN));
+                case Type.LONG -> {
+                    body.add(new InsnNode(LCONST_0));
+                    body.add(new InsnNode(LRETURN));
+                }
+                case Type.INT -> {
+                    body.add(new InsnNode(ICONST_0));
+                    body.add(new InsnNode(IRETURN));
+                }
+                case Type.BOOLEAN -> {
+                    body.add(new InsnNode(ICONST_0));
+                    body.add(new InsnNode(IRETURN));
+                }
+                case Type.OBJECT -> {
+                    body.add(new InsnNode(ACONST_NULL));
+                    body.add(new InsnNode(ARETURN));
+                }
+                default -> throw new IllegalArgumentException(
+                        "Unsupported transport return type in " + node.name + "." + method.name);
+            }
+            method.access &= ~ACC_NATIVE;
+            method.maxStack = 1;
+            // A long or double argument occupies two local slots, so the frame follows the
+            // descriptor size rather than the argument count.
+            int slots = 1;
+            for (var argument : Type.getArgumentTypes(method.desc)) slots += argument.getSize();
+            method.maxLocals = slots;
+            lowered++;
+        }
+        if (lowered == 0) {
+            throw new IllegalArgumentException("No native method to lower in " + node.name);
+        }
+        adaptations.add(node.name + " native methods = unreachable host transport");
+    }
+
+    /**
+     * Removes the desktop native-library load from the platform provider.
+     *
+     * <p>The provider checks isIos before this branch and returns the iOS platform, so the load
+     * only runs on a desktop host. A closed world cannot express System.load at all, and iOS never
+     * reaches it, so the call is dropped while the surrounding flow keeps its shape: the extracted
+     * path is still computed and the following code still runs, it simply never maps a library.
+     */
+    static void lowerPlatformNativeBranch(ClassNode node, List<String> adaptations) {
+        if (!node.name.equals(PLATFORM_PROVIDER)) return;
+        int removed = 0;
+        for (var method : node.methods) {
+            for (var instruction : method.instructions) {
+                if (!(instruction instanceof MethodInsnNode call)) continue;
+                if (!call.owner.equals("java/lang/System")) continue;
+                if (!call.name.equals("load") && !call.name.equals("loadLibrary")) continue;
+                if (!call.desc.equals("(Ljava/lang/String;)V")) continue;
+                // Replace System.load(path) with a no-op that still consumes the argument.
+                call.owner = IOS_TRANSPORT_HOST;
+                call.name = "ignoreNativeLibrary";
+                call.desc = "(Ljava/lang/String;)V";
+                call.itf = false;
+                removed++;
+            }
+        }
+        if (removed == 0) {
+            throw new IllegalArgumentException("Platform provider lost its native-library load");
+        }
+        adaptations.add(node.name + " System.load = unreachable desktop library");
+    }
+
     static void lowerVersionLookup(ClassNode node, String sourceHash, List<String> adaptations) {
         if (!node.name.equals("eu/ha3/mc/quick/update/TargettedVersion")) return;
         if (!sourceHash.equals("354dc01c8aff54e3b4543f1d441fcbbbefa32ee15ccc5041aad895a44196aa1b")) {

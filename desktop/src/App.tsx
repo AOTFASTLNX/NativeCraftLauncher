@@ -80,6 +80,7 @@ import {
   type BuildForm,
   type BuildJob,
   type Checks,
+  type RecommendedResource,
 } from "./workflow";
 import ModList from "./ModList";
 import ResourceManager, { resourceRetention } from "./ResourceManager";
@@ -817,6 +818,7 @@ export default function App() {
     "0.19.3",
     "0.19.5",
   ]);
+  const [recommended, setRecommended] = useState<RecommendedResource[]>([]);
   const [jobs, setJobs] = useState<BuildJob[]>([]);
   const [selected, setSelected] = useState("");
   const [busy, setBusy] = useState("");
@@ -1304,6 +1306,7 @@ export default function App() {
     if (b.storage) setStoragePaths(b.storage);
     setFields(b.configFields);
     if (b.loaders?.length) setLoaderOptions(b.loaders.map((row) => row.version));
+    setRecommended(b.recommendedResources ?? []);
     setJobs(b.jobs);
     setSelected(b.jobs.find((j) => isActive(j))?.id ?? b.jobs[0]?.id ?? "");
     // Report the configuration the workbench actually keeps, which may be the
@@ -2321,6 +2324,11 @@ export default function App() {
                           loaderOptions={loaderOptions}
                           onLoaderChange={(loaderVersion) =>
                             update({ loaderVersion })
+                          }
+                          recommended={recommended}
+                          recommendedSelected={form.recommendedResources}
+                          onRecommendedChange={(recommendedResources) =>
+                            update({ recommendedResources })
                           }
                           onChange={(resourceSelection) =>
                             update({ resourceSelection })

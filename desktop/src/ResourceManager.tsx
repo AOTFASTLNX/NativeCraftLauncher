@@ -1,7 +1,7 @@
 import { useState, type CSSProperties } from "react";
 import { Search } from "lucide-react";
 import type { Report, ResourceEntry } from "./model";
-import type { ResourceSelection } from "./workflow";
+import type { RecommendedResource, ResourceSelection } from "./workflow";
 import {
   clientRequirement,
   resourceTier,
@@ -56,6 +56,9 @@ export default function ResourceManager({
   loaderVersion,
   loaderOptions,
   onLoaderChange,
+  recommended,
+  recommendedSelected,
+  onRecommendedChange,
 }: {
   report: Report | null;
   selection: ResourceSelection | null;
@@ -63,6 +66,9 @@ export default function ResourceManager({
   loaderVersion?: string;
   loaderOptions: string[];
   onLoaderChange: (value: string) => void;
+  recommended?: RecommendedResource[];
+  recommendedSelected?: string[];
+  onRecommendedChange?: (ids: string[]) => void;
 }) {
   const [category, setCategory] = useState("all");
   const [tier, setTier] = useState<ResourceTier | "all">("all");
@@ -147,6 +153,56 @@ export default function ResourceManager({
               : "来源未声明 Loader；自动模式使用默认验证版本。"}
         </span>
       </div>
+      {recommended && recommended.length > 0 && onRecommendedChange && (
+        <div className="resource-recommended" aria-label="推荐资源">
+          <div className="resource-recommended-heading">
+            <span className="resource-filter-label">推荐资源</span>
+            <small>
+              由 NCL 验证过的可选 Mod，勾选后下载并加入本次构建。整合包已自带的会被保留。
+            </small>
+          </div>
+          <ul className="resource-recommended-list">
+            {recommended.map((item) => {
+              const checked = (recommendedSelected ?? []).includes(item.id);
+              return (
+                <li key={item.id}>
+                  <label className="resource-recommended-item">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(event) =>
+                        onRecommendedChange(
+                          event.target.checked
+                            ? [...(recommendedSelected ?? []), item.id]
+                            : (recommendedSelected ?? []).filter(
+                                (id) => id !== item.id,
+                              ),
+                        )
+                      }
+                    />
+                    <span className="resource-recommended-text">
+                      <strong>
+                        {item.name}
+                        <span className="resource-recommended-version">
+                          {item.version}
+                        </span>
+                      </strong>
+                      <small>{item.summary}</small>
+                      {checked && item.detail && <small>{item.detail}</small>}
+                      {checked && item.requires.length > 0 && (
+                        <small className="resource-recommended-requires">
+                          同时加入：
+                          {item.requires.map((r) => r.name).join("、")}
+                        </small>
+                      )}
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
       <div className="resource-categories" aria-label="资源分类">
         {[["all", "全部"], ...Object.entries(resourceCategories)].map(
           ([key, label]) => (

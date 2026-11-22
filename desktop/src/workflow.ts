@@ -29,6 +29,8 @@ export interface BuildForm {
   iconPadding?: number;
   testVersion?: string;
   loaderVersion?: string;
+  /** Ids of the recommended Mods to download and add to this build. */
+  recommendedResources?: string[];
   resourceSelection: ResourceSelection | null;
   existingBuild?: string;
   workspace: string;
@@ -167,12 +169,25 @@ export interface Bootstrap {
   setup?: SetupState;
   storage?: StoragePaths;
   loaders?: { version: string; label: string }[];
+  recommendedResources?: RecommendedResource[];
   workspace: string;
   config: string;
   exportOptions: string;
   output: string;
   configFields: Record<string, string>;
   jobs: BuildJob[];
+}
+/** An optional Mod the Builder offers on the resource step, pinned to one verified file. */
+export interface RecommendedResource {
+  id: string;
+  name: string;
+  summary: string;
+  detail: string;
+  version: string;
+  file: string;
+  size: number;
+  requires: { id: string; name: string; file: string }[];
+  loader: string[];
 }
 export { FORM_KEY, LEGACY_FORM_KEY } from "./storage";
 export const defaultForm: BuildForm = {
@@ -183,6 +198,7 @@ export const defaultForm: BuildForm = {
   iconPadding: 0,
   testVersion: "",
   loaderVersion: "auto",
+  recommendedResources: [],
   resourceSelection: null,
   workspace: "",
   python: "",

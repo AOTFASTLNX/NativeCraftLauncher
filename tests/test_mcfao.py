@@ -327,8 +327,11 @@ class FabricInputTests(unittest.TestCase):
         nested = archive([("fabric.mod.json", '{"id":"test_nested"}')])
         root = self.jar([("fabric.mod.json", '{"id":"test_parent","jars":[{"file":"nested.jar"}]}'),
                          ("nested.jar", nested)])
+        # The ceiling scales with the root count, so pin the per-root factor as well as the
+        # absolute cap: one root then reaches exactly the floor and the nested Jar overflows it.
         with (patch("prepare_fabric_aot.MAX_TRANSFORM_ARCHIVES", 1),
-              patch("prepare_fabric_aot.MAX_INSPECTION_ARCHIVES", 2)):
+              patch("prepare_fabric_aot.MAX_INSPECTION_ARCHIVES", 2),
+              patch("prepare_fabric_aot.ARCHIVES_PER_ROOT", 1)):
             self.assertEqual(len(inspect_archives([root], self.root, metadata_only=True)), 2)
             attempt = self.root / "transform"
             attempt.mkdir()
@@ -555,15 +558,21 @@ class RuntimeOverlayTests(unittest.TestCase):
                          ["ClasspathPackResources.java", "MappingTable.java", "ModCatalog.java",
                           "ModFiles.java", "OptionalJvmCapabilities.java", "TextureImage.java", "TexturePixels.java"])
         self.assertEqual(skipped, [{"source": "mcfao/aot/GenericVertexSerializer.java",
-                                    "requiresMod": "sodium"}])
+                                    "requiresMod": "sodium"},
+                                   {"source": "mcfao/aot/IosTransport.java",
+                                    "requiresMod": "touchcontroller"},
+                                   {"source": "mcfao/aot/TouchHost.java",
+                                    "requiresMod": "touchcontroller"}])
 
     def test_overlay_compiles_when_its_mod_is_present(self):
-        roots = [self.jar("sodium.jar", "sodium")]
+        roots = [self.jar("sodium.jar", "sodium"), self.jar("touchcontroller.jar", "touchcontroller")]
         compiled, skipped = runtime_overlay_sources(roots)
         self.assertEqual([p.name for p in compiled],
-                         ["ClasspathPackResources.java", "GenericVertexSerializer.java", "MappingTable.java",
-                          "ModCatalog.java", "ModFiles.java", "OptionalJvmCapabilities.java",
-                          "TextureImage.java", "TexturePixels.java"])
+                         ["ClasspathPackResources.java", "GenericVertexSerializer.java",
+                          "IosTransport.java", "MappingTable.java",
+                          "ModCatalog.java", "ModFiles.java",
+                          "OptionalJvmCapabilities.java", "TextureImage.java", "TexturePixels.java",
+                          "TouchHost.java"])
         self.assertEqual(skipped, [])
 
     def test_root_mod_ids_reads_every_root_jar(self):

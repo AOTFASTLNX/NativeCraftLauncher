@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "note": "NCL-verified optional Mods offered on the resource step. Each entry is pinned to an exact file and hash; the Builder downloads it from cdn.modrinth.com and adds it to the staged pack only when the user ticks it.",
+  "minecraft": "26.1.2",
+  "resources": [
+    {
+      "id": "touchcontroller",
+      "name": "TouchController",
+      "summary": "触屏操作，接近基岩版手感：准星吸附、长按破坏、快捷栏手势。",
+      "detail": "需要 Fabric API 与 Fabric Language Kotlin。NCL 在构建期做两处适配：剔除只服务于语言适配器的 kotlin-reflect，并把 iOS Transport 的三个 native 入口接到宿主桥；消息编解码仍是模组自己的代码。",
+      "projectId": "U7KwGAnT",
+      "versionId": "xTHCk8Zq",
+      "version": "0.3.1-alpha17",
+      "file": "TouchController-0.3.1-alpha17+fabric.jar",
+      "url": "https://cdn.modrinth.com/data/U7KwGAnT/versions/xTHCk8Zq/TouchController-0.3.1-alpha17%2Bfabric.jar",
+      "size": 13675767,
+      "sha512": "667b20676b7a759e430c8a0707550379632f6c8897a2c3bbe973bfd037387b4b49f563ebf0e2e6d8e9174ed31884f4152166554c74b07ccdec5904426b668ccd",
+      "sha1": "eec1818185671d38d9389bdf5c8d119ca5826797",
+      "requires": [
+        {
+          "id": "fabric-language-kotlin",
+          "name": "Fabric Language Kotlin",
+          "file": "fabric-language-kotlin-1.13.11+kotlin.2.3.21.jar",
+          "url": "https://cdn.modrinth.com/data/Ha28R6CL/versions/2i87JpYj/fabric-language-kotlin-1.13.11%2Bkotlin.2.3.21.jar",
+          "size": 7813444,
+          "sha512": "fa5ed2613f7216999cc0c5ddc71906f082a32b52507d7160acbdcf0eb8de12993ba302e5afde6681d025008ecc66c7533fc0c21deb672ef681b2194fb9be4245",
+          "sha1": "b6190b247c557c493dc4204121744f289a1d1837",
+          "providedByPack": [
+            "fabric-api"
+          ]
+        }
+      ],
+      "verifiedAgainst": {
+        "loader": [
+          "0.19.3",
+          "0.19.5"
+        ],
+        "evidence": "准备阶段（FABRIC_AOT_INPUT_PREPARED）验证：8 个模块全部 TRANSFORMED。kotlin-reflect 是唯一触发闭世界 Proxy 禁令的嵌套库，模组只引用 kotlin-stdlib 的接口；iOS Transport 的 init/receive/send 已改写为 mcfao.aot.IosTransport 委托。"
+      }
+    }
+  ]
+}
