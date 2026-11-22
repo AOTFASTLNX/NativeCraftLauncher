@@ -309,6 +309,91 @@ test("resource management offers a verified Fabric Loader choice", async ({
   });
 });
 
+test("recommended resources tick into the build and add their requirements", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 900, height: 1000 });
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "ncl.onboarding.v1",
+      JSON.stringify({
+        version: 1,
+        accepted: true,
+        storageRoot: "/fixture",
+        completed: true,
+      }),
+    );
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: any) => {
+          if (command === "default_workspace") return "/fixture/source";
+          if (command === "system_accent") return "#3478D4";
+          if (command === "account_action")
+            return {
+              configured: true,
+              verified: true,
+              profile: { id: "fixture", name: "Fixture" },
+              verifiedAt: Math.floor(Date.now() / 1000),
+              verifiedUntil: Math.floor(Date.now() / 1000) + 3600,
+            };
+          if (command !== "workbench_action") return null;
+          if (args.action === "bootstrap")
+            return {
+              workspace: "/fixture/source",
+              config: "/fixture/config.json",
+              exportOptions: "/fixture/Export.plist",
+              output: "/fixture/builds",
+              configFields: {},
+              jobs: [],
+              recommendedResources: [
+                {
+                  id: "touchcontroller",
+                  name: "TouchController",
+                  summary: "触屏操作，接近基岩版手感。",
+                  detail: "NCL 在构建期剔除 kotlin-reflect，并把 iOS Transport 接到宿主桥。",
+                  version: "0.3.1-alpha17",
+                  file: "TouchController-0.3.1-alpha17+fabric.jar",
+                  size: 13675767,
+                  requires: [
+                    {
+                      id: "fabric-language-kotlin",
+                      name: "Fabric Language Kotlin",
+                      file: "fabric-language-kotlin-1.13.11+kotlin.2.3.21.jar",
+                    },
+                  ],
+                  loader: ["0.19.3", "0.19.5"],
+                },
+              ],
+            };
+          return null;
+        },
+      },
+    });
+  });
+  await page.goto("/");
+  await importReport(page);
+  await page.getByRole("button", { name: "下一步", exact: true }).click();
+  const section = page.getByLabel("推荐资源");
+  await expect(section).toBeVisible();
+  await expect(section.getByText("TouchController", { exact: false })).toBeVisible();
+  const box = section.getByRole("checkbox");
+  await expect(box).not.toBeChecked();
+  // The requirement is only named once the offer is ticked.
+  await expect(section.getByText("Fabric Language Kotlin")).toHaveCount(0);
+  await box.check();
+  await expect(section.getByText("Fabric Language Kotlin")).toBeVisible();
+  const saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ncl.builder.v2") || "{}"),
+  );
+  expect(saved.recommendedResources).toEqual(["touchcontroller"]);
+  await box.uncheck();
+  const cleared = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ncl.builder.v2") || "{}"),
+  );
+  expect(cleared.recommendedResources).toEqual([]);
+});
+
 test("new workbench prioritizes a guided IPA build and exposes browser limits", async ({
   page,
 }) => {
