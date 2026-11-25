@@ -45,6 +45,10 @@ static int nextIdentifier = 1;
 static int active;
 static int width = 1, height = 1;
 static unsigned overflows;
+/* A full ring is not a pointer-table overflow: nothing leaves the Mod's state, the message
+   waits for the next boundary. Counting them together made a drained-then-retried drag look
+   like a capacity recovery. */
+static unsigned queueOverflows;
 static unsigned char queue[FAOT_TOUCH_QUEUE_CAPACITY][FAOT_TOUCH_MESSAGE_BYTES];
 static int queueLength[FAOT_TOUCH_QUEUE_CAPACITY];
 static int queueRead, queueWrite;
@@ -66,7 +70,7 @@ static float normalise(float value) {
 static int push(int length, const unsigned char *bytes) {
     if (length <= 0 || length > FAOT_TOUCH_MESSAGE_BYTES) return 0;
     if (queueWrite - queueRead >= FAOT_TOUCH_QUEUE_CAPACITY) {
-        overflows++;
+        queueOverflows++;
         return 0;
     }
     int slot = queueWrite % FAOT_TOUCH_QUEUE_CAPACITY;
@@ -231,12 +235,15 @@ void faot_touch_snapshot(int nextWidth, int nextHeight, int enabled) {
            edge-driven, so dropping the pair would swallow a tap. Publish the press first, then
            the release, in that order. */
         if (!contact->announced) {
-            if (contact->move) {
-                contact->x = contact->moveX;
-                contact->y = contact->moveY;
+            /* A press carries whatever position it already reached. The move flag survives a
+               failed push, so a full queue retries at the next boundary instead of announcing
+               the press at a stale spot. */
+            float x = contact->move ? contact->moveX : contact->x;
+            float y = contact->move ? contact->moveY : contact->y;
+            if (push(encodeAdd(message, contact->id, x, y), message)) {
+                contact->x = x;
+                contact->y = y;
                 contact->move = 0;
-            }
-            if (push(encodeAdd(message, contact->id, contact->x, contact->y), message)) {
                 contact->announced = 1;
                 FAOT_TOUCH_LOG("[TouchBridge] emit type=1 id=%d x=%.3f y=%.3f\n",
                                contact->id, (double)contact->x, (double)contact->y);
@@ -251,14 +258,16 @@ void faot_touch_snapshot(int nextWidth, int nextHeight, int enabled) {
         }
         if (contact->announced && contact->move
                 && (contact->moveX != contact->x || contact->moveY != contact->y)) {
-            contact->x = contact->moveX;
-            contact->y = contact->moveY;
-            if (push(encodeAdd(message, contact->id, contact->x, contact->y), message)) {
+            /* Only advance the published position when the frame actually carried it. Writing
+               first and pushing second loses the drag: the next boundary compares against the
+               new value, sees no change and stays silent for the rest of the gesture. */
+            if (push(encodeAdd(message, contact->id, contact->moveX, contact->moveY), message)) {
+                contact->x = contact->moveX;
+                contact->y = contact->moveY;
                 FAOT_TOUCH_LOG("[TouchBridge] emit type=1 id=%d x=%.3f y=%.3f\n",
                                contact->id, (double)contact->x, (double)contact->y);
             }
         }
-        contact->move = 0;
     }
     pthread_mutex_unlock(&touchMutex);
 }

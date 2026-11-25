@@ -122,6 +122,28 @@ int main(void) {
     drain();
     assert(!faot_touch_start(0, 0));
     faot_touch_disconnect();
+
+    /* A move that arrives while the ring is full must survive to a later boundary.
+       Publishing the position before the push succeeds loses the rest of the drag. */
+    faot_touch_disconnect();
+    faot_touch_snapshot(100, 200, 1);
+    int dragged = faot_touch_start(0.1f, 0.1f);
+    /* Fill the ring without draining, so the next push has nowhere to go. */
+    for (int i = 0; i < FAOT_TOUCH_QUEUE_CAPACITY; i++) {
+        faot_touch_move(dragged, 0.001f * (float)(i + 1), 0.5f);
+        faot_touch_snapshot(100, 200, 1);
+    }
+    faot_touch_move(dragged, 0.77f, 0.66f);
+    faot_touch_snapshot(100, 200, 1);
+    /* A real frame drains what it read, which is what frees room for the retry. */
+    drain();
+    faot_touch_snapshot(100, 200, 1);
+    int retried = 0;
+    while (faot_touch_receive(message, sizeof message) == 16) {
+        if (integer(message + 4) == dragged && fabsf(real(message + 8) - 0.77f) < 0.01f) retried = 1;
+    }
+    assert(retried);
+
     puts("TOUCH_INPUT_PASS");
     return 0;
 }
