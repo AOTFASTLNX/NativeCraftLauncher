@@ -13,7 +13,7 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from mcfao import (Build, build as compile_game, device_xcode, export_ipa, load_config, resolve_development_team,
-                   main as mcfao_main, select_development_team, tree_files, write_json)
+                   main as mcfao_main, select_development_team, strip_appledouble, tree_files, write_json)
 from external_storage import ExternalStorageUnavailable
 from probe_client_graph import native_failure_reason
 from prepare_fabric_aot import MAX_TRANSFORM_ARCHIVES
@@ -212,6 +212,22 @@ class StageTests(unittest.TestCase):
         (self.root / "link").symlink_to("/dev/null")
         with self.assertRaisesRegex(ValueError, "symbolic link"):
             tree_files(self.root)
+
+    def test_resource_fork_sidecars_are_removed_before_packaging(self):
+        """An exFAT build directory gives every file a ._ companion.
+
+        Xcode seals those companions, the IPA writer drops them as metadata, and the
+        resulting signature covers files the payload does not contain.
+        """
+        app = self.root / "C0Harness.app"
+        (app / "assets/objects/ab").mkdir(parents=True)
+        (app / "assets/objects/ab/real").write_bytes(b"asset")
+        (app / "assets/objects/ab/._real").write_bytes(b"sidecar")
+        (app / "._Info.plist").write_bytes(b"sidecar")
+        (app / "Info.plist").write_bytes(b"plist")
+        self.assertEqual(strip_appledouble(app), 2)
+        self.assertEqual(sorted(p.name for p in app.rglob("*") if p.is_file()),
+                         ["Info.plist", "real"])
 
     def test_config_rejects_unknown_schema(self):
         path = self.root / "config.json"

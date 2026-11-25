@@ -589,6 +589,65 @@ def write_payload_ipa(app: Path, ipa: Path):
             raise ValueError("IPA CRC check failed")
 
 
+def verify_ipa_signature(ipa: Path, logs: Path):
+    """Unpack the shipped IPA and verify it, not the build directory it came from.
+
+    The build directory can hold files the IPA writer treats as metadata. Verifying the
+    unpacked payload is the only way to know the signature covers what actually ships.
+    """
+    logs.mkdir(parents=True, exist_ok=True)
+    unpacked = logs / "payload"
+    result = capture(["/usr/bin/ditto", "--norsrc", "--noextattr", "--noqtn", "-x", "-k",
+                      str(ipa), str(unpacked)], logs / "unpack", 300)
+    if result["exitCode"] or result["timedOut"]:
+        raise ValueError(f"IPA unpack failed. Logs: {logs / 'unpack'}")
+    apps = [p for p in (unpacked / "Payload").glob("*.app") if not is_metadata(p.name)]
+    if len(apps) != 1:
+        raise ValueError("Expected one app in the exported IPA")
+    verify = capture(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(apps[0])],
+                     logs / "codesign", 120)
+    if verify["exitCode"] or verify["timedOut"]:
+        raise ValueError(f"Exported IPA signature does not match its payload. Logs: {logs / 'codesign'}")
+
+
+def strip_appledouble(app: Path) -> int:
+    """Remove macOS resource-fork sidecars before the app is signed.
+
+    A build directory on exFAT gets a ._name companion for every file the copy creates.
+    Xcode signs them like content, but the IPA writer drops them as metadata, so the sealed
+    CodeResources lists entries the shipped payload does not have and installation fails its
+    signature check. Removing them before signing keeps the seal equal to what ships.
+    """
+    removed = 0
+    for folder, dirs, files in os.walk(app, followlinks=False):
+        for name in files + dirs:
+            if not name.startswith("._"):
+                continue
+            path = Path(folder) / name
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            removed += 1
+    return removed
+
+
+def reseal_app(app: Path, logs: Path):
+    """Re-sign after removing sidecars so CodeResources matches the shipped payload."""
+    identity = command("/usr/bin/security", "find-identity", "-v", "-p", "codesigning")
+    match = re.search(r'"Apple Development: [^"]+"', identity)
+    if match is None:
+        raise ValueError("No Apple Development identity to reseal the app")
+    entitlements = logs / "entitlements.plist"
+    logs.mkdir(parents=True, exist_ok=True)
+    entitlements.write_bytes(command("/usr/bin/codesign", "-d", "--entitlements", ":-", app).encode())
+    result = capture(["/usr/bin/codesign", "--force", "--sign", match.group(0).strip('"'),
+                      "--entitlements", str(entitlements), "--timestamp=none", "--generate-entitlement-der",
+                      str(app)], logs / "sign", 300)
+    if result["exitCode"] or result["timedOut"]:
+        raise ValueError(f"Re-signing the app failed. Logs: {logs / 'sign'}")
+
+
 def verify_icon(app: Path, name: str):
     """Require the packaged icon catalog and the Info.plist keys actool emits."""
     info = plistlib.loads((app / "Info.plist").read_bytes())
@@ -1108,6 +1167,12 @@ def build(args, config, version: str = DEFAULT_VERSION):
                           icon=pipeline_icon, icon_name=icon_name),
             *([f"FAOT_INSTANCE_DATA_DIR={seed}"] if seed else []), "-derivedDataPath", "{product}", "build"],
             outputs=lambda attempt: attempt / "product/Build/Products/World Device-iphoneos/C0Harness.app")
+        # Xcode has already signed the app at this point, so the sidecars have to be gone
+        # before the signature is verified below; otherwise the seal describes files the
+        # packaged IPA cannot carry.
+        sidecars = strip_appledouble(app)
+        if sidecars and not manifest["unsigned"]:
+            reseal_app(app, output / "verify" / "reseal")
         validate_package(app, staged, manifest["assetsSHA256"], renderer)
         validate_game_profile(app, manifest)
         provenance = validate_build_provenance(app, key, manifest["sourceCommit"], renderer)
@@ -1120,6 +1185,8 @@ def build(args, config, version: str = DEFAULT_VERSION):
         facts = app_facts(app, args.device, output / "verify" / uuid4().hex, renderer, not manifest["unsigned"])
         ipa = output / ipa_filename(manifest["testVersion"])
         write_payload_ipa(app, ipa)
+        if not manifest["unsigned"]:
+            verify_ipa_signature(ipa, output / "verify" / "ipa-signature")
         record_build_pass(compatibility)
         publish(output / "compatibility.json", compatibility)
         write_json(output / "result.json", {
