@@ -733,6 +733,25 @@ void faot_surface_input(void *raw,int mode,int value) {
         else if(mode==GLFW_CURSOR)[view setGameCapture:value==GLFW_CURSOR_DISABLED];
     });
 }
+/* TouchController asks for haptics through its own command channel. UIKit's impact generator
+   is the only public feedback API, and it has to be prepared on the main thread to fire
+   without a visible delay. The generator is kept so repeated presses reuse it. */
+void faot_surface_vibrate(int kind) {
+    onMain(^{
+        static UIImpactFeedbackGenerator *light=nil;
+        static UIImpactFeedbackGenerator *medium=nil;
+        UIImpactFeedbackGenerator *generator;
+        if(kind==0){
+            if(!medium)medium=[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+            generator=medium;
+        }else{
+            if(!light)light=[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+            generator=light;
+        }
+        [generator prepare];
+        [generator impactOccurred];
+    });
+}
 void faot_surface_ime_rect(void *raw,int x,int y,int width,int height) {
     (void)raw;(void)x;(void)y;(void)width;(void)height;
     fprintf(stderr,"[GLFW-lite] IME preedit requires UITextInput; UIKeyInput currently provides committed text only\n");

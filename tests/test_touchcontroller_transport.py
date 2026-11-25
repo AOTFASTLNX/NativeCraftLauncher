@@ -58,6 +58,20 @@ class TouchControllerTransportTests(unittest.TestCase):
         self.assertIn('if (library == null) return false;', host)
         self.assertNotIn('private final long frame = symbol(', host)
 
+    def test_haptics_reach_the_surface(self):
+        """TouchHost forwards VibrateMessage as kind 4; the native side must act on it.
+
+        Dropping the kind leaves the Mod's vibration setting on while nothing happens, which
+        reads as a broken control rather than a missing feature.
+        """
+        host = (ROOT / 'interop/fabric/tool/mcfao/aot/TouchHost.java').read_text()
+        self.assertIn('JNI.invokePV(4L, kind, command)', host)
+        native = (ROOT / 'ios/glfw-lite/glfw_lite.c').read_text()
+        self.assertIn('else if (kind == 4) faot_surface_vibrate(value)', native)
+        surface = (ROOT / 'ios/glfw-lite/uikit_surface.m').read_text()
+        self.assertIn('void faot_surface_vibrate(int kind)', surface)
+        self.assertIn('UIImpactFeedbackGenerator', surface)
+
     def test_nested_libraries_of_another_minecraft_line_are_skipped(self):
         """TouchController bundles one Jar per line; only the target line may be validated."""
         satisfies = prepare_fabric_aot.nested_targets_version

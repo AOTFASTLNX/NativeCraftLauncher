@@ -131,6 +131,7 @@ void *faot_surface_create(GLFWwindow *, int *, int *, int *, int *);
 void faot_surface_destroy(void *);
 void faot_surface_screen(GLFWvidmode *);
 void faot_surface_input(void *, int mode, int value);
+void faot_surface_vibrate(int kind);
 void faot_surface_ime_rect(void *, int, int, int, int);
 void faot_surface_title(void *, const char *);
 void faot_surface_clipboard_set(const char *);

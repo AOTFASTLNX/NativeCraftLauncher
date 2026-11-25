@@ -351,8 +351,10 @@ void faot_touch_begin_frame(int enabled) {
     faot_touch_snapshot(w, h, enabled);
 }
 void faot_touch_command(int kind, int value) {
-    /* Kind 0 is the Mod's ClearPointer request; the UIKit surface owns keyboard visibility. */
+    /* Kind 0 is the Mod's ClearPointer request, 4 is haptics and 8 is keyboard visibility;
+       the UIKit surface owns the last two. */
     if (kind == 0) faot_touch_clear();
+    else if (kind == 4) faot_surface_vibrate(value);
     else if (kind == 8) faot_surface_input(live ? live->surface : NULL, GLFW_IME, value ? 1 : 0);
 }
 const char *glfwGetKeyName(int key,int scan) { (void)scan;static _Thread_local char name[2];if(key>=32&&key<=126){name[0]=(char)key;name[1]=0;return name;}return NULL; }
