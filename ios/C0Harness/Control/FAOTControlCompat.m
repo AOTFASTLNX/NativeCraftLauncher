@@ -11,6 +11,32 @@ BOOL leftShiftHeld = NO;
 
 static NSString *const FAOTControlSafeAreaKey = @"FAOTControlSafeArea";
 static NSString *const FAOTControlScaleKey = @"FAOTControlButtonScale";
+static NSString *const FAOTControlVerticalSafeAreaKey = @"FAOTControlVerticalSafeArea";
+
+/* Enough to keep a button off the display edge, where the system's edge gestures and the
+   rounded corners start to swallow taps. */
+static const CGFloat FAOTControlVerticalSafeAreaDefault = 12.0;
+static const CGFloat FAOTControlVerticalSafeAreaLimit = 60.0;
+
+CGFloat FAOTControlVerticalSafeArea(void) {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if ([defaults objectForKey:FAOTControlVerticalSafeAreaKey] == nil) return FAOTControlVerticalSafeAreaDefault;
+    CGFloat points = [defaults doubleForKey:FAOTControlVerticalSafeAreaKey];
+    return points >= 0 && points <= FAOTControlVerticalSafeAreaLimit ? points : FAOTControlVerticalSafeAreaDefault;
+}
+
+void FAOTControlSetVerticalSafeArea(CGFloat points) {
+    CGFloat clamped = fmin(FAOTControlVerticalSafeAreaLimit, fmax(0, round(points)));
+    [NSUserDefaults.standardUserDefaults setDouble:clamped forKey:FAOTControlVerticalSafeAreaKey];
+}
+
+BOOL FAOTControlHasCustomSafeArea(void) {
+    return [NSUserDefaults.standardUserDefaults stringForKey:FAOTControlSafeAreaKey].length > 0;
+}
+
+void FAOTControlResetSafeArea(void) {
+    [NSUserDefaults.standardUserDefaults removeObjectForKey:FAOTControlSafeAreaKey];
+}
 
 id getPrefObject(NSString *key) {
     if ([key isEqualToString:@"control.button_scale"]) return @(FAOTControlButtonScale());
@@ -43,15 +69,38 @@ void setPrefBool(NSString *key, BOOL value) {
     [NSUserDefaults.standardUserDefaults setBool:value forKey:key];
 }
 
-UIEdgeInsets getDefaultSafeArea(void) {
-    UIWindow *window = UIApplication.sharedApplication.windows.firstObject;
-    UIEdgeInsets safeArea = window ? window.safeAreaInsets : UIEdgeInsetsZero;
-    CGSize screenSize = UIScreen.mainScreen.bounds.size;
-    if (screenSize.width < screenSize.height) {
-        safeArea.left = safeArea.top;
-        safeArea.right = safeArea.bottom;
+static UIWindow *FAOTControlHostWindow(void) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
+            if (candidate.isKeyWindow) return candidate;
+        }
     }
-    safeArea.top = safeArea.bottom = 0;
+    return UIApplication.sharedApplication.windows.firstObject;
+}
+
+UIEdgeInsets getDefaultSafeArea(void) {
+    UIWindow *window = FAOTControlHostWindow();
+    UIEdgeInsets safeArea = window ? window.safeAreaInsets : UIEdgeInsetsZero;
+    /* The control canvas is authored in landscape and NCL only runs in landscape, so the
+       window already reports the notch on its left/right edges and the home indicator on the
+       bottom. Only a portrait host, such as a preview embedded somewhere else, needs the
+       insets rotated back onto the landscape edges before they are used. */
+    BOOL portrait = window != nil && window.bounds.size.width < window.bounds.size.height;
+    if (portrait) {
+        CGFloat top = MAX(0, safeArea.top);
+        CGFloat bottom = MAX(0, safeArea.bottom);
+        safeArea.left = MAX(0, safeArea.left) + top;
+        safeArea.right = MAX(0, safeArea.right) + bottom;
+        safeArea.top = 0;
+        safeArea.bottom = 0;
+    }
+    /* Keep the top and bottom strips clear as well. The game draws its own HUD there and the
+       pause screen and toolbars land in the same place, so touching a control near an edge
+       would otherwise fight the HUD or the system edge gesture. */
+    CGFloat clearance = FAOTControlVerticalSafeArea();
+    safeArea.top = MAX(0, safeArea.top) + clearance;
+    safeArea.bottom = MAX(0, safeArea.bottom) + clearance;
     return safeArea;
 }
 
@@ -61,6 +110,12 @@ CGRect getSafeArea(CGRect screenBounds) {
     if (screenBounds.size.width < screenBounds.size.height) {
         safeArea = UIEdgeInsetsMake(safeArea.right, safeArea.top, safeArea.left, safeArea.bottom);
     }
+    /* A layout saved before the vertical strip existed, or a custom canvas dragged to the
+       very edge, still has to leave room for the HUD. Clamp here so the editor and the game
+       always agree on the playable rectangle. */
+    CGFloat clearance = FAOTControlVerticalSafeArea();
+    safeArea.top = MAX(safeArea.top, clearance);
+    safeArea.bottom = MAX(safeArea.bottom, clearance);
     return UIEdgeInsetsInsetRect(screenBounds, safeArea);
 }
 
@@ -77,7 +132,17 @@ void setSafeArea(CGSize screenSize, CGRect frame) {
                                     screenSize.height - CGRectGetMaxY(frame),
                                     screenSize.width - CGRectGetMaxX(frame));
     }
+    safeArea.top = MAX(0, safeArea.top);
+    safeArea.bottom = MAX(0, safeArea.bottom);
+    safeArea.left = MAX(0, safeArea.left);
+    safeArea.right = MAX(0, safeArea.right);
     setPrefObject(@"control.control_safe_area", NSStringFromUIEdgeInsets(safeArea));
+}
+
+CGRect FAOTControlFullBleedRect(CGRect bounds) {
+    CGFloat clearance = FAOTControlVerticalSafeArea();
+    return CGRectMake(bounds.origin.x, bounds.origin.y + clearance,
+                      bounds.size.width, MAX(0, bounds.size.height - clearance * 2));
 }
 
 void showDialog(NSString *title, NSString *message) {

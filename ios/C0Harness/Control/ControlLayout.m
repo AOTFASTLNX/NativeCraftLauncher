@@ -69,13 +69,22 @@
     return YES;
 }
 
+/* SAFEAREA_CLIP_BEGIN */
+/* Pojav layouts may draw past the canvas: a bottom row authored at
+   "${bottom} + ${margin}" extrapolates below a 390pt reference canvas. While playing, a
+   child hanging outside the safe rectangle must not take touches in the HUD strip. The editor
+   keeps clipping off so the canvas frame and its drag handles stay visible. */
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    if (!isControlModifiable && !CGRectContainsPoint(self.bounds, point)) {
+        return nil;
+    }
     UIView *result = [super hitTest:point withEvent:event];
     if (result == self && !isControlModifiable) {
         return nil;
     }
     return result;
 }
+/* SAFEAREA_CLIP_END */
 
 - (void)setFrame:(CGRect)frame {
     [super setFrame:frame];

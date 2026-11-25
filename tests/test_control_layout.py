@@ -88,6 +88,54 @@ class ControlInputTests(unittest.TestCase):
         self.assertNotIn("FAOTBuiltinControlModels", SURFACE)
 
 
+class SafeAreaTests(unittest.TestCase):
+    """The game HUD lives along the top and bottom edges; controls must keep clear of it."""
+
+    def test_default_safe_area_reserves_the_top_and_bottom_strips(self):
+        body = COMPAT.split("UIEdgeInsets getDefaultSafeArea(void)")[1].split("CGRect getSafeArea")[0]
+        self.assertIn("FAOTControlVerticalSafeArea()", body)
+        self.assertIn("safeArea.top = MAX(0, safeArea.top) + clearance;", body)
+        self.assertIn("safeArea.bottom = MAX(0, safeArea.bottom) + clearance;", body)
+        # The old code zeroed the vertical insets outright.
+        self.assertNotIn("safeArea.top = safeArea.bottom = 0;", body)
+
+    def test_landscape_insets_are_not_rotated_away(self):
+        body = COMPAT.split("UIEdgeInsets getDefaultSafeArea(void)")[1].split("CGRect getSafeArea")[0]
+        # Only a portrait window needs its vertical insets moved onto the landscape edges.
+        self.assertIn("window.bounds.size.width < window.bounds.size.height", body)
+        self.assertNotIn("UIScreen.mainScreen.bounds.size", body)
+        self.assertIn("CGFloat top = MAX(0, safeArea.top);", body)
+
+    def test_custom_safe_area_cannot_cover_the_hud(self):
+        body = COMPAT.split("CGRect getSafeArea(CGRect screenBounds)")[1].split("void setSafeArea")[0]
+        self.assertIn("safeArea.top = MAX(safeArea.top, clearance);", body)
+        self.assertIn("safeArea.bottom = MAX(safeArea.bottom, clearance);", body)
+
+    def test_children_outside_the_canvas_cannot_take_touches(self):
+        # The reference layout's bottom row extrapolates a few points below its canvas, so the
+        # hit test has to reject touches outside the safe rectangle while playing.
+        layout = (CONTROL / "ControlLayout.m").read_text(encoding="utf-8")
+        self.assertIn("CGRectContainsPoint(self.bounds, point)", layout)
+
+    def test_editor_and_game_share_the_same_default(self):
+        editor = (CONTROL / "CustomControlsViewController.m").read_text(encoding="utf-8")
+        self.assertIn("FAOTControlFullBleedRect(self.view.bounds)", editor)
+        self.assertNotIn("self.ctrlView.frame = self.view.bounds;", editor)
+        self.assertIn("FAOTControlVerticalSafeArea()", PAGES)
+
+    def test_vertical_clearance_is_configurable(self):
+        for token in ("FAOTControlSetVerticalSafeArea", "FAOTControlHasCustomSafeArea",
+                      "FAOTControlResetSafeArea"):
+            self.assertIn(token, (CONTROL / "FAOTControlCompat.h").read_text(encoding="utf-8"))
+        self.assertIn("verticalSafeAreaChanged:", PAGES)
+        self.assertIn("resetSafeAreaTapped", PAGES)
+
+    def test_smoke_host_asserts_the_strip(self):
+        smoke = (ROOT / "tests/launcher_smoke_main.m").read_text(encoding="utf-8")
+        self.assertIn("CONTROL_VERTICAL_SAFE_AREA_PASS", smoke)
+        self.assertIn("FAOTControlFullBleedRect(editor.view.bounds)", smoke)
+
+
 class ControlEditorTests(unittest.TestCase):
     def test_undo_implementation_is_in_both_xcode_targets(self):
         for project_path in ("ios/C0Harness/C0Harness.xcodeproj/project.pbxproj",

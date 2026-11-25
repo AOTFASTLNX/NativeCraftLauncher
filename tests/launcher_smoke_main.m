@@ -111,6 +111,17 @@ static int smokeEnqueue(void *window, int kind, double a, double b, int c, int d
             CGRect area = CGRectInset(editor.view.bounds, 30, 15);
             setSafeArea(editor.view.bounds.size, area);
             if (!CGRectEqualToRect(getSafeArea(editor.view.bounds), area)) abort();
+            /* The top and bottom strips stay reserved for the game HUD even when a layout
+               asks for the whole canvas, because a control under the hotbar is unreachable. */
+            FAOTControlResetSafeArea();
+            CGFloat clearance = FAOTControlVerticalSafeArea();
+            CGRect defaults = getSafeArea(editor.view.bounds);
+            if (clearance < 8 || defaults.origin.y < clearance - 0.5 ||
+                CGRectGetMaxY(defaults) > CGRectGetMaxY(editor.view.bounds) - clearance + 0.5) abort();
+            CGRect bleed = FAOTControlFullBleedRect(editor.view.bounds);
+            if (fabs(CGRectGetMinY(bleed) - clearance) > 0.5 ||
+                fabs(CGRectGetMaxY(bleed) - (CGRectGetMaxY(editor.view.bounds) - clearance)) > 0.5 ||
+                fabs(bleed.size.width - editor.view.bounds.size.width) > 0.5) abort();
             FAOTControlsView *gameControls = [[FAOTControlsView alloc] initWithFrame:editor.view.bounds];
             if (![gameControls loadLayoutNamed:name error:nil]) abort();
             [gameControls setInputWindow:(void *)0x1234 enqueue:(void *)smokeEnqueue];
@@ -129,7 +140,21 @@ static int smokeEnqueue(void *window, int kind, double a, double b, int c, int d
             [gameControls setInputWindow:NULL enqueue:NULL];
             NSLog(@"CONTROL_INPUT_DISPATCH_PASS");
             [gameControls layoutIfNeeded];
+            if (!CGRectEqualToRect(gameControls.layoutView.frame, defaults)) abort();
+            setSafeArea(editor.view.bounds.size, area);
+            [gameControls setNeedsLayout];
+            [gameControls layoutIfNeeded];
             if (!CGRectEqualToRect(gameControls.layoutView.frame, area)) abort();
+            FAOTControlResetSafeArea();
+            [gameControls setNeedsLayout];
+            [gameControls layoutIfNeeded];
+            if (!CGRectEqualToRect(gameControls.layoutView.frame, defaults)) abort();
+            for (UIView *view in gameControls.layoutView.subviews) {
+                if (![view isKindOfClass:ControlButton.class] || view.hidden) continue;
+                if (CGRectGetMinY(view.frame) < -0.5 ||
+                    CGRectGetMaxY(view.frame) > CGRectGetHeight(gameControls.layoutView.bounds) + 0.5) abort();
+            }
+            NSLog(@"CONTROL_VERTICAL_SAFE_AREA_PASS");
             [editor.undoManager removeAllActions];
             [editor performSelector:NSSelectorFromString(@"actionMenuExit")];
             [[NSFileManager defaultManager] removeItemAtPath:FAOTControlMapPath(name) error:nil];

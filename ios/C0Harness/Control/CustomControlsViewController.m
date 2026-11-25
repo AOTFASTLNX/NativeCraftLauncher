@@ -286,7 +286,9 @@
 - (void)changeSafeAreaSelection:(UISegmentedControl *)sender {
     switch (sender.selectedSegmentIndex) {
         case 0:
-            self.ctrlView.frame = self.view.bounds;
+            /* "None" no longer means every pixel: the top and bottom strips stay reserved for
+               the game HUD, exactly as the in-game surface lays them out. */
+            self.ctrlView.frame = FAOTControlFullBleedRect(self.view.bounds);
             break;
         case 1:
             self.ctrlView.frame = UIEdgeInsetsInsetRect(self.view.bounds, getDefaultSafeArea());
@@ -300,7 +302,7 @@
 }
 
 - (void)loadSafeAreaSelectionFor:(UISegmentedControl *)control {
-    if (CGRectEqualToRect(self.ctrlView.frame, self.view.bounds)) {
+    if (CGRectEqualToRect(self.ctrlView.frame, FAOTControlFullBleedRect(self.view.bounds))) {
         control.selectedSegmentIndex = 0;
     } else {
         control.selectedSegmentIndex = !CGRectEqualToRect(self.ctrlView.frame, UIEdgeInsetsInsetRect(self.view.bounds, getDefaultSafeArea())) + 1;

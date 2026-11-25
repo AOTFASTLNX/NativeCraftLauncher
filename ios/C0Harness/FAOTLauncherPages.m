@@ -8,6 +8,7 @@
 #import "FAOTSkinView.h"
 #import "FAOTLauncherViewController.h"
 #import "FAOTControlBridge.h"
+#import "FAOTControlCompat.h"
 #import <objc/runtime.h>
 #import <math.h>
 
@@ -296,6 +297,8 @@ static BOOL FAOTValidOfflineName(NSString *name) {
 @property (nonatomic, strong) UIStackView *layoutList;
 @property (nonatomic, strong) UISlider *scaleSlider;
 @property (nonatomic, strong) UILabel *scaleCaption;
+@property (nonatomic, strong) UISlider *verticalSafeAreaSlider;
+@property (nonatomic, strong) UILabel *verticalSafeAreaCaption;
 @property (nonatomic, strong) UISlider *renderScaleSlider;
 @property (nonatomic, strong) UILabel *renderScaleCaption;
 @property (nonatomic, strong) UILabel *memoryCaption;
@@ -364,6 +367,26 @@ static BOOL FAOTValidOfflineName(NSString *name) {
     [stack addArrangedSubview:FAOTPaddedCard(FAOTMakeStack(@[layoutCaption, self.layoutLabel, self.layoutList,
                                                               layoutActions, scaleTitle, self.scaleSlider,
                                                               self.scaleCaption, layoutHint], 10), 14)];
+
+    // The top and bottom strips are where the game draws its HUD. Controls are kept out of
+    // them so a tap near the edge reaches the control instead of the hotbar or hotbar tooltip.
+    self.verticalSafeAreaSlider = [[UISlider alloc] initWithFrame:CGRectZero];
+    self.verticalSafeAreaSlider.minimumValue = 0.0f;
+    self.verticalSafeAreaSlider.maximumValue = 60.0f;
+    self.verticalSafeAreaSlider.continuous = YES;
+    self.verticalSafeAreaSlider.minimumTrackTintColor = FAOTAccentColor();
+    [self.verticalSafeAreaSlider addTarget:self action:@selector(verticalSafeAreaChanged:)
+                          forControlEvents:UIControlEventValueChanged];
+    self.verticalSafeAreaCaption = FAOTMakeLabel(@"", 11, UIFontWeightRegular, FAOTSecondaryTextColor());
+    UIButton *resetSafeArea = FAOTMakeButton(@"使用系统默认", FAOTFieldColor(), FAOTPrimaryTextColor());
+    [resetSafeArea.heightAnchor constraintEqualToConstant:32].active = YES;
+    [resetSafeArea addTarget:self action:@selector(resetSafeAreaTapped) forControlEvents:UIControlEventTouchUpInside];
+    UILabel *safeAreaTitle = FAOTMakeLabel(@"上下安全区", 12, UIFontWeightMedium, FAOTMutedTextColor());
+    UILabel *safeAreaHint = FAOTMakeLabel(@"按键与顶栏、底部快捷栏之间保留的空白。拖过自定义安全区的布局会以此为准；编辑器里的安全区设置仍然优先。",
+                                          11, UIFontWeightRegular, FAOTMutedTextColor());
+    [stack addArrangedSubview:FAOTPaddedCard(FAOTMakeStack(@[safeAreaTitle, self.verticalSafeAreaSlider,
+                                                              self.verticalSafeAreaCaption, resetSafeArea,
+                                                              safeAreaHint], 8), 14)];
 
     // Render scale is a launch-time setting: the GL41 surface reads it once and
     // builds its framebuffer at that fraction of the device resolution.
@@ -439,6 +462,10 @@ static BOOL FAOTValidOfflineName(NSString *name) {
     self.scaleSlider.value = (float)FAOTControlButtonScale();
     self.scaleCaption.text = [NSString stringWithFormat:@"%.0f%%（所有布局通用，进入游戏生效）",
                               FAOTControlButtonScale()];
+    self.verticalSafeAreaSlider.value = (float)FAOTControlVerticalSafeArea();
+    self.verticalSafeAreaCaption.text = [NSString stringWithFormat:@"上下各 %.0f 点%@",
+                                         FAOTControlVerticalSafeArea(),
+                                         FAOTControlHasCustomSafeArea() ? @"（自定义安全区仍优先生效）" : @""];
     self.renderScaleSlider.value = (float)settings.renderScale;
     self.renderScaleCaption.text = [NSString stringWithFormat:@"%.0f%%（下次进入游戏生效）",
                                     settings.renderScale * 100.0];
@@ -514,6 +541,21 @@ static BOOL FAOTValidOfflineName(NSString *name) {
     double value = round((double)slider.value / 5.0) * 5.0;
     [NSUserDefaults.standardUserDefaults setDouble:value forKey:@"FAOTControlButtonScale"];
     self.scaleCaption.text = [NSString stringWithFormat:@"%.0f%%（所有布局通用，进入游戏生效）", value];
+}
+
+- (void)verticalSafeAreaChanged:(UISlider *)slider {
+    FAOTControlSetVerticalSafeArea(slider.value);
+    self.verticalSafeAreaSlider.value = (float)FAOTControlVerticalSafeArea();
+    self.verticalSafeAreaCaption.text = [NSString stringWithFormat:@"上下各 %.0f 点%@",
+                                         FAOTControlVerticalSafeArea(),
+                                         FAOTControlHasCustomSafeArea() ? @"（自定义安全区仍优先生效）" : @""];
+}
+
+- (void)resetSafeAreaTapped {
+    FAOTControlResetSafeArea();
+    FAOTControlSetVerticalSafeArea(12.0);
+    [self refreshPage];
+    self.statusLabel.text = @"已恢复为系统安全区 + 12 点留白";
 }
 
 - (void)renderScaleChanged:(UISlider *)slider {

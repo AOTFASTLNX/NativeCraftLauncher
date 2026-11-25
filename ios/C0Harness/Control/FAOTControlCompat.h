@@ -37,6 +37,23 @@ UIEdgeInsets getDefaultSafeArea(void);
 CGRect getSafeArea(CGRect screenBounds);
 void setSafeArea(CGSize screenSize, CGRect frame);
 
+/// Extra clearance, in points, kept between the in-game controls and the top and bottom
+/// edges. Defaults to 12; the window's own safe-area insets are added on top of it.
+FOUNDATION_EXPORT CGFloat FAOTControlVerticalSafeArea(void);
+FOUNDATION_EXPORT void FAOTControlSetVerticalSafeArea(CGFloat points);
+
+/// YES when the player dragged a custom canvas in the editor, which takes precedence over
+/// the default insets (and the vertical-clearance preference).
+FOUNDATION_EXPORT BOOL FAOTControlHasCustomSafeArea(void);
+
+/// Drops the custom canvas and returns to the system safe area plus vertical clearance.
+FOUNDATION_EXPORT void FAOTControlResetSafeArea(void);
+
+/// The largest canvas the controls may occupy in a full-screen landscape host: the whole
+/// screen minus the vertical clearance. The editor's "None" mode uses this so its preview
+/// matches the in-game strip.
+FOUNDATION_EXPORT CGRect FAOTControlFullBleedRect(CGRect bounds);
+
 void showDialog(NSString *title, NSString *message);
 NSString *localize(NSString *key, NSString *_Nullable comment);
 UIViewController *_Nullable currentVC(void);

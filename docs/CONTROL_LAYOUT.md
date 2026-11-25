@@ -36,6 +36,18 @@ Break/Place/Items、顶栏 Chat/Keys/More/Menu/GUI/Pause。首次启动时由
 Pojav/Amethyst 自带的默认布局没有直接沿用：它的顶栏按钮相互重叠，Pause 又压在 Exit Menu
 下面，在 844x390 的横屏安全区上不可用。
 
+## 上下安全区
+
+游戏把 HUD 画在屏幕上下两条边上：顶部是聊天/按键入口，底部是快捷栏和物品提示。控件如果
+压在这些位置，点按会先落到 HUD 或系统边缘手势上，所以默认安全区在系统内边距之外，再给上下
+各留 12 点空白（`FAOTControlVerticalSafeArea`，可在设置页的「上下安全区」里调到 0–60）。
+
+- `getDefaultSafeArea()` 只在真正的竖屏宿主上才旋转内边距：NCL 一直横屏运行，窗口已经把刘海
+  放在左右、小白条放在底部，再旋转一次会把左右留白算错。
+- `getSafeArea()` 会给任何已保存的安全区补上这条上下留白，旧布局和自定义画布同样受益。
+- 编辑器里的“无”现在等于“整屏减去上下留白”（`FAOTControlFullBleedRect`），不会再让画布一直铺到 HUD 底下。
+- 设置页的「使用系统默认」会清掉拖出来的自定义安全区，并恢复 12 点留白。
+
 ## 导入与兼容
 
 - 支持 Pojav v1–v8 的 `mControlDataList` / `mDrawerDataList` / `mJoystickDataList`，导入时按
