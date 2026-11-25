@@ -3,11 +3,13 @@
 from __future__ import annotations
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 from bootstrap_toolchain import sha256
 from capture import ROOT, capture
+from storage_config import cache_path
 from graphics_common import register_tree
 from glfw_runtime_contract import validate_glfw_renderer
 from inventory_client_native_calls import glfw_symbols
@@ -23,6 +25,37 @@ INPUT_POLL_EXPORTS = frozenset({
 TOUCH_EXPORTS = frozenset({
     "faot_touch_begin_frame", "faot_touch_receive", "faot_touch_command",
 })
+
+# Drives the queue through the events a first frame produces and writes the encoded bytes, so
+# the Mod's own decoder can read them. Kept here rather than in the fixture because that file
+# asserts in place and must stay free of file output.
+TOUCH_DUMP_SOURCE = r"""
+#include <stdio.h>
+#include "touch_input.h"
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 2;
+    FILE *out = fopen(argv[1], "wb");
+    if (!out) return 3;
+    unsigned char bytes[256];
+    int length;
+    faot_touch_snapshot(400, 800, 1);
+    int first = faot_touch_start(0.25f, 0.75f);
+    int second = faot_touch_start(0.5f, 0.2f);
+    faot_touch_move(first, 0.6f, 0.3f);
+    faot_touch_end(second);
+    faot_touch_snapshot(400, 800, 1);
+    while ((length = faot_touch_receive(bytes, sizeof bytes)) > 0) {
+        fwrite(bytes, 1, (size_t)length, out);
+    }
+    faot_touch_clear();
+    while ((length = faot_touch_receive(bytes, sizeof bytes)) > 0) {
+        fwrite(bytes, 1, (size_t)length, out);
+    }
+    fclose(out);
+    return 0;
+}
+"""
 
 # Generated evidence is not part of a packaged source tree, so the caller
 # (workbench or CLI) supplies either the client JAR or an inventory that was
@@ -122,6 +155,35 @@ def main(argv=None):
             tested=capture([str(touch)],output/"touch-fixture-run",60);result["touchFixtureRun"]=tested
             result["touchFixture"]="PASS" if tested["exitCode"]==0 and "TOUCH_INPUT_PASS" in (output/"touch-fixture-run/stdout.log").read_text() else "FAIL"
         else: result["touchFixture"]="FAIL"
+        # The fixture above proves the bytes the queue emits. Decoding them with the Mod's own
+        # message classes proves the other half of the contract, which is the part a wrong
+        # length or byte order would break silently on the device.
+        result["touchWireProbe"]="SKIPPED"
+        if touch_build["exitCode"]==0 and args.client and args.test_host:
+            wire=output/"touch-wire"
+            wire.mkdir()
+            dump=wire/"dump.c"
+            dump.write_text(TOUCH_DUMP_SOURCE)
+            built=capture(["xcrun","clang","-std=c11","-I",str(source),str(dump),
+                           str(source/"touch_input.c"),"-o",str(wire/"dump")],wire/"compile",120)
+            if built["exitCode"]==0:
+                stream=wire/"stream.bin"
+                capture([str(wire/"dump"),str(stream)],wire/"run",60)
+                if stream.is_file():
+                    java_home=cache_path('toolchains/graalvm-25.0.2/'
+                                         'graalvm-community-openjdk-25.0.2+10.1/Contents/Home')
+                    classes=wire/"classes"
+                    compile_probe=capture([str(java_home/"bin/javac"),"-proc:none","-cp",str(args.client),
+                                           "-d",str(classes),str(ROOT/"interop/graphics/TouchWireProbe.java")],
+                                          wire/"javac",120)
+                    if compile_probe["exitCode"]==0:
+                        decoded=capture([str(java_home/"bin/java"),"-cp",
+                                         str(classes)+os.pathsep+str(args.client),"TouchWireProbe",str(stream)],
+                                        wire/"probe",120)
+                        expected=["ADD index=1 x=0.600 y=0.300","ADD index=2 x=0.500 y=0.200",
+                                  "REMOVE index=2","CLEAR","messages=4 consumed=44/44"]
+                        lines=(wire/"probe"/"stdout.log").read_text().splitlines()
+                        result["touchWireProbe"]="PASS" if decoded["exitCode"]==0 and lines==expected else "FAIL"
     (output/"result.json").write_text(json.dumps(result,indent=2)+"\n")
     command=[sys.executable,"-B",str(Path(__file__).resolve()),*(sys.argv[1:] if argv is None else argv)]
     try: register_tree(output,command)
