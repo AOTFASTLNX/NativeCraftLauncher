@@ -99,6 +99,9 @@ def main(argv=None):
     parser.add_argument("--client-inventory",type=Path,
                         help="client-native-call-inventory.json generated from the client being built")
     parser.add_argument("--test-host",action="store_true")
+    parser.add_argument("--touch-java-classpath",
+                        help="LWJGL jars needed by the Java touch-host probe; "
+                             "omit to skip that probe")
     args=parser.parse_args(argv)
     if args.client:
         client=Path(args.client).resolve()
@@ -184,6 +187,24 @@ def main(argv=None):
                                   "REMOVE index=2","CLEAR","messages=4 consumed=44/44"]
                         lines=(wire/"probe"/"stdout.log").read_text().splitlines()
                         result["touchWireProbe"]="PASS" if decoded["exitCode"]==0 and lines==expected else "FAIL"
+                    # The bridge's Java half has its own failure mode: an init that never
+                    # installs a host is pruned by the closed-world image and input simply
+                    # never arrives. The probe drives install, handshake and reply routing.
+                    result["touchHostProbe"]="SKIPPED"
+                    overlay=ROOT/"interop/fabric/tool/mcfao/aot"
+                    host_classes=wire/"host-classes"
+                    if args.touch_java_classpath:
+                        host_cp=os.pathsep.join([str(args.client),args.touch_java_classpath])
+                        host_compile=capture([str(java_home/"bin/javac"),"-proc:none","-cp",host_cp,
+                                              "-d",str(host_classes),
+                                              str(overlay/"IosTransport.java"),str(overlay/"TouchHost.java"),
+                                              str(ROOT/"interop/graphics/TouchHostProbe.java")],wire/"host-javac",180)
+                        if host_compile["exitCode"]==0:
+                            host_run=capture([str(java_home/"bin/java"),"-cp",
+                                              str(host_classes)+os.pathsep+host_cp,
+                                              "mcfao.aot.TouchHostProbe"],wire/"host-probe",120)
+                            result["touchHostProbe"]="PASS" if host_run["exitCode"]==0 and \
+                                "TOUCH_HOST_PASS" in (wire/"host-probe"/"stdout.log").read_text() else "FAIL"
     (output/"result.json").write_text(json.dumps(result,indent=2)+"\n")
     command=[sys.executable,"-B",str(Path(__file__).resolve()),*(sys.argv[1:] if argv is None else argv)]
     try: register_tree(output,command)
