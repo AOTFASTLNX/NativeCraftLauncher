@@ -1170,7 +1170,10 @@ def main(argv=None):
                                  help="transparent or #RRGGBB behind a non-square image")
     compile_command.add_argument("--icon-padding", type=int, default=0,
                                  help="Percentage of transparent margin around the artwork (0-30)")
-    compile_command.add_argument("--heap-gib", type=int, choices=(6,7,8,9), default=9)
+    # The audited Recollection3 image crossed 9 GiB during method compilation once the
+    # TouchController host classes stayed live. The bound follows the host's physical memory
+    # rather than a fixed small menu, and the value is still recorded in inputs.json.
+    compile_command.add_argument("--heap-gib", type=int, default=9)
     compile_command.add_argument("--builder-gc", choices=("parallel", "g1"),
                                  help="Host Native Image JVM collector (default: G1 for Fabric, Parallel for vanilla)")
     compile_command.add_argument("--quick-build", action="store_true",

@@ -86,6 +86,7 @@ int glfwInit(void) {
 }
 void glfwTerminate(void) {
     if (live) glfwDestroyWindow(live);
+    faot_touch_disconnect();
     initialized = 0; errorCallback = NULL; monitorCallback = NULL;
     free(clipboard); clipboard = NULL;
     glfwDefaultWindowHints();
@@ -157,6 +158,9 @@ void glfwDestroyWindow(GLFWwindow *w) {
         }
         w->glContext=0;
     }
+    /* Contacts belong to the surface being destroyed; releasing them here keeps a recreated
+       window from inheriting presses the game can no longer see lifted. */
+    faot_touch_disconnect();
     pthread_mutex_lock(&mutex); live=NULL; readIndex=writeIndex=0; pthread_mutex_unlock(&mutex);
     faot_surface_destroy(w->surface);
     if (current==w) current=NULL;
@@ -336,12 +340,46 @@ void glfwSetInputMode(GLFWwindow *w,int mode,int value) {
 int glfwRawMouseMotionSupported(void) { return 0; }
 int glfwGetKey(GLFWwindow *w,int key) { return valid(w)&&key>=0&&key<349?w->keys[key]:0; }
 int glfwGetMouseButton(GLFWwindow *w,int button) { return valid(w)&&button>=0&&button<8?w->mouseButtons[button]:0; }
+/* The Java bridge resolves these through the GLFW SharedLibrary, so they live beside the
+   window functions instead of in a separate JNI library. One frame boundary publishes the
+   contacts that are down; the encoded bytes are read on the game thread. */
+void faot_touch_begin_frame(int enabled) {
+    if (!initialized || !live) { faot_touch_snapshot(0, 0, 0); return; }
+    pthread_mutex_lock(&mutex);
+    int w = live->width, h = live->height;
+    pthread_mutex_unlock(&mutex);
+    faot_touch_snapshot(w, h, enabled);
+}
+void faot_touch_command(int kind, int value) {
+    /* Kind 0 is the Mod's ClearPointer request; the UIKit surface owns keyboard visibility. */
+    if (kind == 0) faot_touch_clear();
+    else if (kind == 8) faot_surface_input(live ? live->surface : NULL, GLFW_IME, value ? 1 : 0);
+}
 const char *glfwGetKeyName(int key,int scan) { (void)scan;static _Thread_local char name[2];if(key>=32&&key<=126){name[0]=(char)key;name[1]=0;return name;}return NULL; }
 void glfwSetCursorPos(GLFWwindow *w,double x,double y) { if(valid(w)&&isfinite(x)&&isfinite(y)){double scale=gl41_scale_value();faot_glfw_enqueue(w,FAOT_EVENT_CURSOR,x/scale,y/scale,0,0);} }
 void glfwGetCursorPos(GLFWwindow *w,double *x,double *y) { if(valid(w)){if(x)*x=w->cursorX;if(y)*y=w->cursorY;} }
 GLFWcursor *glfwCreateStandardCursor(int shape) { if(!ready())return NULL;GLFWcursor *c=malloc(sizeof *c);if(c)c->shape=shape;return c; }
+/* A Mod-supplied image cursor has no UIKit equivalent: the app hides the pointer while the
+   game owns it and shows the system arrow otherwise. Keep the handle so the caller's
+   destroy still balances, and report success like the standard-cursor path. */
+GLFWcursor *glfwCreateCursor(const GLFWimage *image,int xhot,int yhot) {
+    (void)image;(void)xhot;(void)yhot;
+    if(!ready())return NULL;
+    GLFWcursor *c=malloc(sizeof *c);
+    if(c)c->shape=0;
+    return c;
+}
 void glfwDestroyCursor(GLFWcursor *c) { free(c); }
 void glfwSetCursor(GLFWwindow *w,GLFWcursor *c) { (void)c;(void)w; }  /* hot path: Minecraft sets the cursor every frame */
+/* iOS has no GL context extensions to query; the GL41 line runs through OSMesa, which the
+   game already validated at context creation. A Mod asking here wants "not a desktop GL
+   extension", and 0 is that answer. */
+int glfwExtensionSupported(const char *extension) { (void)extension;return 0; }
+/* Window activation is the system's decision on iOS; the scene owns focus, and a Mod asking
+   to raise its window must not fight the user's own app switching. */
+void glfwFocusWindow(GLFWwindow *w) { (void)w; }
+void glfwRequestWindowAttention(GLFWwindow *w) { (void)w; }
+int glfwGetKeyScancode(int key) { return key>=0&&key<349?key:-1; }
 const char *glfwGetClipboardString(GLFWwindow *w) { if(w&&!valid(w))return NULL;free(clipboard);clipboard=faot_surface_clipboard_copy();return clipboard; }
 void glfwSetClipboardString(GLFWwindow *w,const char *s) { if((!w||valid(w))&&s)faot_surface_clipboard_set(s); }
 void glfwSetPreeditCursorRectangle(GLFWwindow *w,int x,int y,int width,int height) { if(valid(w))faot_surface_ime_rect(w->surface,x,y,width,height); }

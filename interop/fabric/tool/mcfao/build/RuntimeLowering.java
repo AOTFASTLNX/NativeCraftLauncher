@@ -789,6 +789,9 @@ final class RuntimeLowering implements Opcodes {
      */
     static final String IOS_TRANSPORT = "top/fifthlight/touchcontroller/common/platform/ios/Transport";
     static final String IOS_TRANSPORT_HOST = "mcfao/aot/IosTransport";
+    static final String RENDER_EVENTS = "top/fifthlight/touchcontroller/common/event/render/RenderEvents";
+    static final String RENDER_START = "onRenderStart";
+    static final String RENDER_START_DESC = "()V";
     static final String PLATFORM_PROVIDER =
             "top/fifthlight/touchcontroller/common/platform/provider/PlatformProvider";
     /**
@@ -818,6 +821,13 @@ final class RuntimeLowering implements Opcodes {
             "top/fifthlight/touchcontroller/proxy/client/nativebridge/NativeInterface");
 
     static void lowerIosTransport(ClassNode node, List<String> adaptations) {
+        // A frame boundary has to exist before the Mod polls, or contacts pressed between two
+        // renders are never published. The Mod's own render hook is the one place every platform
+        // already agrees on, so the iOS transport is installed there.
+        if (node.name.equals(RENDER_EVENTS)) {
+            lowerTouchFrameBoundary(node, adaptations);
+            return;
+        }
         if (!node.name.equals(IOS_TRANSPORT)) return;
         boolean rewritten = false;
         for (var method : node.methods) {
@@ -826,6 +836,8 @@ final class RuntimeLowering implements Opcodes {
                 method.instructions.clear();
                 method.tryCatchBlocks.clear();
                 method.localVariables = null;
+                method.instructions.add(new MethodInsnNode(INVOKESTATIC, IOS_TRANSPORT_HOST,
+                        "init", "()V", false));
                 method.instructions.add(new InsnNode(RETURN));
                 method.maxStack = 0;
                 method.maxLocals = 1;
@@ -862,6 +874,27 @@ final class RuntimeLowering implements Opcodes {
         if (!rewritten) {
             throw new IllegalArgumentException("TouchController transport had no native method to lower");
         }
+    }
+
+    /**
+     * Runs the host transport's frame boundary at the start of the Mod's own render tick.
+     *
+     * <p>TouchController polls {@code IosPlatform} from this method. The native queue publishes a
+     * contact exactly once per boundary, so installing the host without this hook would leave the
+     * Mod polling a queue nobody ever fills.
+     */
+    static void lowerTouchFrameBoundary(ClassNode node, List<String> adaptations) {
+        MethodNode target = null;
+        for (var method : node.methods) {
+            if (method.name.equals(RENDER_START) && method.desc.equals(RENDER_START_DESC)) {
+                target = method;
+                break;
+            }
+        }
+        if (target == null) return;
+        target.instructions.insert(new MethodInsnNode(INVOKESTATIC, IOS_TRANSPORT_HOST,
+                "beginFrame", "()V", false));
+        adaptations.add(node.name + "#" + RENDER_START + " = host input frame boundary");
     }
 
     /**

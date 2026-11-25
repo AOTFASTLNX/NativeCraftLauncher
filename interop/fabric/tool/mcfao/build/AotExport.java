@@ -1112,6 +1112,14 @@ public final class AotExport implements Opcodes {
                 }
             }
             modClasses.add(STATIC_HOOKS.replace('/', '.'));
+            // The transport keeps its installed host in a static field. Initialised at build
+            // time, that field is the build JVM's null and Native Image folds every later read
+            // to null, pruning TouchHost and turning the Mod's poll into a constant miss. These
+            // two classes therefore belong to run time, like the Mod classes above.
+            if (names.contains("mcfao/aot/IosTransport.class")) {
+                modClasses.add("mcfao.aot.IosTransport");
+                if (names.contains("mcfao/aot/TouchHost.class")) modClasses.add("mcfao.aot.TouchHost");
+            }
             for (var service : services.entrySet()) {
                 String name = SERVICES + service.getKey();
                 if (base.getEntry(name) != null) {

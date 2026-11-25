@@ -23,6 +23,9 @@ public final class IosTransport {
 
     /** The native side of the bridge. */
     public interface Host {
+        /** Marks a render frame boundary; contacts pressed since the last one become visible. */
+        default void beginFrame() {}
+
         /** Fill buffer with at most one message; return the byte count, or 0. */
         int receive(byte[] buffer);
 
@@ -40,8 +43,33 @@ public final class IosTransport {
         host = replacement;
     }
 
+    /**
+     * Installs the real iOS host.
+     *
+     * <p>Called from the Mod's own {@code Transport.init()} after the rewrite, which is the one
+     * point the Mod already treats as "the host is ready". Constructing the host here is what
+     * keeps {@link TouchHost} reachable: an image built without a caller prunes it, the field
+     * stays null and every poll silently returns "no input".
+     */
+    public static void init() {
+        if (host != null) return;
+        try {
+            install(new TouchHost());
+        } catch (RuntimeException | LinkageError unavailable) {
+            // A missing symbol or an unreadable config must not turn every poll into a throw:
+            // the Mod would fail its whole render tick. Idle instead, and say why once.
+            System.err.println("[TouchBridge] host unavailable: " + unavailable);
+        }
+    }
+
     public static boolean installed() {
         return host != null;
+    }
+
+    /** Publishes the contacts down at this frame; the Mod polls them from its render event. */
+    public static void beginFrame() {
+        Host current = host;
+        if (current != null) current.beginFrame();
     }
 
     /**
@@ -60,7 +88,7 @@ public final class IosTransport {
     public static void send(byte[] buffer, int offset, int length) {
         Host current = host;
         if (current == null || buffer == null) return;
-        if (offset < 0 || length < 0 || offset + length > buffer.length) {
+        if (offset < 0 || length < 0 || offset > buffer.length - length) {
             throw new IllegalArgumentException("Transport send outside the buffer");
         }
         current.send(buffer, offset, length);

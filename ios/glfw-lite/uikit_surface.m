@@ -8,6 +8,7 @@
 #include "pointer_motion.h"
 #include "glfw_lite.h"
 #include "input_mapping.h"
+#include "touch_diagnostics.h"
 
 /* The on-screen control surface lives in the app (ios/C0Harness/Control). The GLFW dylib is
    also built standalone for CI, so it reaches the surface through the ObjC runtime instead
@@ -46,6 +47,10 @@ static UIWindowScene *activeScene(void) {
 @property(nonatomic,assign) unsigned heldNativeMouseButtons;
 @property(nonatomic,strong) UIView *noKeyboard;
 @property(nonatomic,strong) UITouch *primaryTouch;
+/* Direct contacts the Mod consumes, keyed by the UIKit touch that created them. A pointer stays
+   owned for the whole gesture: the Mod must see the same id until it receives the release. */
+@property(nonatomic,strong) NSMapTable<UITouch *,NSNumber *> *modPointers;
+@property(nonatomic,assign) CGSize touchLayoutSize;
 @property(nonatomic,assign) int primaryButton;
 @property(nonatomic,strong) NSMutableIndexSet *forwardedKeys;
 @property(nonatomic,strong) UIView<FAOTControlSurface> *controls;
@@ -56,6 +61,8 @@ static UIWindowScene *activeScene(void) {
 - (void)nativeMouseButton:(int)index pressed:(BOOL)pressed;
 - (void)pointerHovered:(UIHoverGestureRecognizer *)recognizer;
 - (void)resetHoverMotion;
+- (void)clearModPointers;
+- (void)endModPointersInTouches:(NSSet<UITouch *> *)touches;
 @end
 @implementation FAOTMetalView
 + (Class)layerClass { return CAMetalLayer.class; }
@@ -95,6 +102,12 @@ static UIWindowScene *activeScene(void) {
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
+    if(!CGSizeEqualToSize(self.touchLayoutSize,self.bounds.size)){
+        // Normalised coordinates describe the old viewport; the game cannot map them after a
+        // rotation, and the contacts themselves are still down.
+        [self clearModPointers];
+        self.touchLayoutSize=self.bounds.size;
+    }
     CGFloat scale=self.window.screen.scale ?: UIScreen.mainScreen.scale;
     self.contentScaleFactor=scale;
     CAMetalLayer *layer=(CAMetalLayer *)self.layer;
@@ -160,10 +173,25 @@ static UIWindowScene *activeScene(void) {
     }else [self resetHoverMotion];
 }
 - (void)resetHoverMotion { faot_pointer_reset(&_hoverMotion); }
+- (void)clearModPointers {
+    faot_touch_clear();
+    [self.modPointers removeAllObjects];
+}
+- (void)endModPointersInTouches:(NSSet<UITouch *> *)touches {
+    for(UITouch *contact in touches){
+        NSNumber *identifier=[self.modPointers objectForKey:contact];
+        if(!identifier)continue;
+        faot_touch_end(identifier.intValue);
+        [self.modPointers removeObjectForKey:contact];
+    }
+}
 - (void)setGameCapture:(BOOL)captured {
     if(self.captured==captured)return;
     [self resetHoverMotion];
-    if(!captured)[self releaseGameControls];
+    if(!captured){
+        [self clearModPointers];
+        [self releaseGameControls];
+    }
     self.captured=captured;
     self.hasCapturedGame|=captured;
     // iPadOS may deny pointer lock (for example in Split View). Observe the actual lock state.
@@ -172,7 +200,19 @@ static UIWindowScene *activeScene(void) {
 }
 /* Absolute point coordinates match glfwGetWindowSize. Pixel scale belongs to framebuffer size. */
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    if(!self.handle||self.primaryTouch)return;
+    // Pojav control views receive their own hit-tested touches. Only contacts that reach this
+    // view belong to the Mod, and they stay with it until UIKit ends them.
+    if(!self.handle)return;
+    if(!self.modPointers)self.modPointers=[NSMapTable strongToStrongObjectsMapTable];
+    CGSize size=self.bounds.size;
+    for(UITouch *contact in touches){
+        if(contact.type!=UITouchTypeDirect||!faot_touch_enabled())continue;
+        if(size.width<=0||size.height<=0)continue;
+        CGPoint point=[contact locationInView:self];
+        int identifier=faot_touch_start(point.x/size.width,point.y/size.height);
+        if(identifier) [self.modPointers setObject:@(identifier) forKey:contact];
+    }
+    if(self.primaryTouch)return;
     UITouch *touch=touches.anyObject;
     // GCMouse supplies hardware mouse clicks in game; do not forward UIKit duplicates.
     if(self.captured&&self.nativeMouseConnected&&touch.type==UITouchTypeIndirectPointer)return;
@@ -186,6 +226,13 @@ static UIWindowScene *activeScene(void) {
 }
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     if(!self.handle)return;
+    CGSize size=self.bounds.size;
+    for(UITouch *contact in touches){
+        NSNumber *identifier=[self.modPointers objectForKey:contact];
+        if(!identifier)continue;
+        CGPoint point=[contact locationInView:self];
+        if(size.width>0&&size.height>0)faot_touch_move(identifier.intValue,point.x/size.width,point.y/size.height);
+    }
     UITouch *touch=self.primaryTouch;if(!touch||![touches containsObject:touch])return;
     CGPoint p=[touch locationInView:self],old=[touch previousLocationInView:self];
     if(self.captured)faot_glfw_enqueue(self.handle,FAOT_EVENT_CURSOR_DELTA,p.x-old.x,p.y-old.y,0,0);
@@ -194,6 +241,7 @@ static UIWindowScene *activeScene(void) {
 }
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     (void)event;
+    [self endModPointersInTouches:touches];
     if(self.primaryTouch&&[touches containsObject:self.primaryTouch]){
         if(self.handle&&self.primaryButton>=0)faot_glfw_enqueue(self.handle,FAOT_EVENT_BUTTON,self.primaryButton,0,0,0);
         self.primaryTouch=nil;
@@ -478,6 +526,7 @@ void *faot_surface_create(GLFWwindow *handle,int *width,int *height,int *pw,int 
         surface.backgroundToken=[nc addObserverForName:UISceneWillDeactivateNotification object:scene queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note){
             (void)note;weakSurface.canPresent=NO;weakSurface.refreshLink.paused=YES;FAOTMetalView *view=inputView;
             if(view.primaryTouch){if(view.primaryButton>=0)faot_glfw_enqueue(handle,FAOT_EVENT_BUTTON,view.primaryButton,0,0,0);view.primaryTouch=nil;}
+            [view clearModPointers];
             [view releaseGameControls];
             [view resetHoverMotion];
             view.pointerIsLocked=NO;
@@ -493,6 +542,7 @@ void faot_surface_destroy(void *raw) {
         surface.canPresent=NO;
         [surface.refreshLink invalidate];
         surface.refreshLink=nil;
+        [surface.view clearModPointers];
         surface.view.handle=NULL;
         [surface.view.controls setInputWindow:NULL enqueue:NULL];
         NSNotificationCenter *nc=NSNotificationCenter.defaultCenter;

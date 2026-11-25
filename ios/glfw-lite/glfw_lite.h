@@ -89,8 +89,13 @@ const char *glfwGetKeyName(int, int);
 void glfwSetCursorPos(GLFWwindow *, double, double);
 void glfwGetCursorPos(GLFWwindow *, double *, double *);
 GLFWcursor *glfwCreateStandardCursor(int);
+GLFWcursor *glfwCreateCursor(const GLFWimage *, int, int);
 void glfwDestroyCursor(GLFWcursor *);
 void glfwSetCursor(GLFWwindow *, GLFWcursor *);
+int glfwExtensionSupported(const char *);
+void glfwFocusWindow(GLFWwindow *);
+void glfwRequestWindowAttention(GLFWwindow *);
+int glfwGetKeyScancode(int);
 const char *glfwGetClipboardString(GLFWwindow *);
 void glfwSetClipboardString(GLFWwindow *, const char *);
 void glfwSetPreeditCursorRectangle(GLFWwindow *, int, int, int, int);
@@ -117,6 +122,10 @@ enum { FAOT_EVENT_RESIZE, FAOT_EVENT_FOCUS, FAOT_EVENT_CURSOR, FAOT_EVENT_BUTTON
        FAOT_EVENT_SCROLL, FAOT_EVENT_CHAR, FAOT_EVENT_KEY, FAOT_EVENT_CLOSE, FAOT_EVENT_CURSOR_DELTA };
 int faot_glfw_enqueue(GLFWwindow *, int kind, double a, double b, int c, int d);
 void faot_glfw_resize(GLFWwindow *, int width, int height, int pixelsWidth, int pixelsHeight);
+
+/* TouchController's wire format is encoded in touch_input.c and pulled by Java. The three
+   symbols below are the whole host bridge: one frame boundary, one byte read and one command. */
+#include "touch_input.h"
 void *faot_glfw_metal_layer(GLFWwindow *);
 void *faot_surface_create(GLFWwindow *, int *, int *, int *, int *);
 void faot_surface_destroy(void *);

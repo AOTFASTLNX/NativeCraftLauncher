@@ -8,7 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"tools"))
-from build_glfw_lite import required_symbols,exported_symbols,INPUT_POLL_EXPORTS,validate_input_exports
+from build_glfw_lite import (required_symbols,exported_symbols,INPUT_POLL_EXPORTS,TOUCH_EXPORTS,
+                             validate_input_exports)
 import build_glfw_lite
 from build_openal_soft import stage_inputs
 from graphics_common import bridge_overlays,register_tree
@@ -95,7 +96,11 @@ class NativeBoundaryTests(unittest.TestCase):
     def test_historical_glfw_without_mouse_polling_is_rejected(self):
         with self.assertRaisesRegex(ValueError,"glfwGetMouseButton"):
             validate_input_exports({"glfwGetKey","glfwGetCursorPos"})
-        validate_input_exports(set(INPUT_POLL_EXPORTS))
+        # The Mod's touch transport resolves through this dylib too, so a build that only
+        # answers the vanilla input polls is still incomplete.
+        with self.assertRaisesRegex(ValueError,"faot_touch_begin_frame"):
+            validate_input_exports(set(INPUT_POLL_EXPORTS))
+        validate_input_exports(set(INPUT_POLL_EXPORTS) | TOUCH_EXPORTS)
     def test_mach_o_symbol_prefix_is_removed_once(self):
         self.assertEqual(exported_symbols("_glfwInit\n_Java_a_b\n"),{"glfwInit","Java_a_b"})
     def test_jni_overload_mangling_is_unambiguous(self):

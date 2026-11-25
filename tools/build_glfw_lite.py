@@ -18,6 +18,11 @@ from mod_file_policy import is_metadata
 INPUT_POLL_EXPORTS = frozenset({
     "glfwGetMouseButton", "glfwGetKey", "glfwGetCursorPos",
 })
+# TouchController's iOS transport resolves these from the GLFW dylib. A build without them
+# links, starts and then fails on the first Mod frame, so the contract is checked here.
+TOUCH_EXPORTS = frozenset({
+    "faot_touch_begin_frame", "faot_touch_receive", "faot_touch_command",
+})
 
 # Generated evidence is not part of a packaged source tree, so the caller
 # (workbench or CLI) supplies either the client JAR or an inventory that was
@@ -34,9 +39,9 @@ def load_inventory(path: Path) -> dict:
     return json.loads(path.read_text())
 
 def validate_input_exports(symbols: set[str]) -> None:
-    missing = INPUT_POLL_EXPORTS - symbols
+    missing = (INPUT_POLL_EXPORTS | TOUCH_EXPORTS) - symbols
     if missing:
-        raise ValueError("GLFW input polling exports missing; rebuild GLFW: " + ", ".join(sorted(missing)))
+        raise ValueError("GLFW input/touch exports missing; rebuild GLFW: " + ", ".join(sorted(missing)))
 
 def exported_symbols(text: str) -> set[str]:
     return {line.split()[-1].removeprefix("_") for line in text.splitlines() if line.split()}
@@ -76,7 +81,7 @@ def main(argv=None):
     binary=output/"libglfw.dylib"
     cmd=["xcrun","--sdk",args.sdk,"clang","-target",target,"-std=c11","-fobjc-arc","-O2",
          "-Wall","-Wextra","-Werror","-Wno-deprecated-declarations","-dynamiclib",
-         str(source/"glfw_lite.c"),str(source/"uikit_surface.m"),str(source/"osmesa_gl.c"),"-framework","UIKit","-framework","Foundation",
+         str(source/"glfw_lite.c"),str(source/"touch_input.c"),str(source/"uikit_surface.m"),str(source/"osmesa_gl.c"),"-framework","UIKit","-framework","Foundation",
          "-framework","QuartzCore","-framework","CoreGraphics","-framework","Metal","-framework","GameController","-install_name","@rpath/libglfw.dylib","-o",str(binary)]
     result={"status":"BLOCKED","gateC0":"BLOCKED","target":target,
             "scope":"GLFW native subset only; no Java bridge or Minecraft renderer acceptance",
@@ -100,7 +105,7 @@ def main(argv=None):
     if args.test_host:
         fixture=output/"glfw-state-test"
         host=capture(["xcrun","clang","-std=c11","-Wall","-Wextra","-Werror","-g","-fsanitize=address,undefined",
-                      "-I",str(source),str(source/"glfw_lite.c"),str(source/"osmesa_gl.c"),
+                      "-I",str(source),str(source/"glfw_lite.c"),str(source/"touch_input.c"),str(source/"osmesa_gl.c"),
                       str(source/"osmesa_present_host_stub.c"),str(ROOT/"interop/graphics/glfw_state_test.c"),
                       "-o",str(fixture)],output/"fixture-compile",120)
         result["fixtureCompile"]=host
@@ -108,12 +113,22 @@ def main(argv=None):
             tested=capture([str(fixture)],output/"fixture-run",30);result["fixtureRun"]=tested
             result["hostStateFixture"]="PASS" if tested["exitCode"]==0 and "GLFW_STATE_PASS" in (output/"fixture-run/stdout.log").read_text() else "FAIL"
         else: result["hostStateFixture"]="FAIL"
+        touch=output/"touch-input-test"
+        touch_build=capture(["xcrun","clang","-std=c11","-Wall","-Wextra","-Werror","-g",
+                      "-fsanitize=address,undefined","-I",str(source),str(source/"touch_input.c"),
+                      str(ROOT/"interop/graphics/touch_input_test.c"),"-o",str(touch)],output/"touch-fixture-compile",120)
+        result["touchFixtureCompile"]=touch_build
+        if touch_build["exitCode"]==0:
+            tested=capture([str(touch)],output/"touch-fixture-run",60);result["touchFixtureRun"]=tested
+            result["touchFixture"]="PASS" if tested["exitCode"]==0 and "TOUCH_INPUT_PASS" in (output/"touch-fixture-run/stdout.log").read_text() else "FAIL"
+        else: result["touchFixture"]="FAIL"
     (output/"result.json").write_text(json.dumps(result,indent=2)+"\n")
     command=[sys.executable,"-B",str(Path(__file__).resolve()),*(sys.argv[1:] if argv is None else argv)]
     try: register_tree(output,command)
     except (OSError,RuntimeError) as exc:
         print(str(exc),file=sys.stderr);return 1
     print(json.dumps({k:v for k,v in result.items() if k not in ("compile","fixtureCompile","fixtureRun")},indent=2))
-    return 0 if result["status"]=="NATIVE_SUBSET_BUILT" and result.get("hostStateFixture")!="FAIL" else 2
+    return 0 if (result["status"]=="NATIVE_SUBSET_BUILT" and result.get("hostStateFixture")!="FAIL"
+                 and result.get("touchFixture")!="FAIL") else 2
 
 if __name__=="__main__":raise SystemExit(main())

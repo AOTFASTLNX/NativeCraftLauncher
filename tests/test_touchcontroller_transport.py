@@ -31,6 +31,33 @@ class TouchControllerTransportTests(unittest.TestCase):
         self.assertIn('if (current == null || buffer == null || buffer.length == 0) return 0;', bridge)
         self.assertIn('public static void install(Host replacement)', bridge)
 
+    def test_the_rewritten_init_installs_the_host(self):
+        """The Mod calls Transport.init() once; that call must reach TouchHost.
+
+        An init that only flips a flag leaves the host field null, which the closed-world image
+        folds to a constant miss and prunes the whole TouchHost class.
+        """
+        lowering = (ROOT / 'interop/fabric/tool/mcfao/build/RuntimeLowering.java').read_text()
+        self.assertIn('"init", "()V", false', lowering)
+        bridge = (ROOT / 'interop/fabric/tool/mcfao/aot/IosTransport.java').read_text()
+        self.assertIn('public static void init()', bridge)
+        self.assertIn('install(new TouchHost())', bridge)
+
+    def test_clearing_the_queue_releases_the_mods_pointers(self):
+        """A cancel or rotation must not leave a control held down in the Mod."""
+        queue = (ROOT / 'ios/glfw-lite/touch_input.c').read_text()
+        self.assertIn('static void abandon(const char *reason)', queue)
+        self.assertIn('push(encodeClear(clear), clear)', queue)
+        for call in ('abandon("clear")', 'abandon("disconnect")', 'abandon("pointer capacity")'):
+            self.assertIn(call, queue)
+
+    def test_native_symbols_are_bound_lazily(self):
+        """Transport.<clinit> can run before GLFW opens its library."""
+        host = (ROOT / 'interop/fabric/tool/mcfao/aot/TouchHost.java').read_text()
+        self.assertIn('private boolean ensure()', host)
+        self.assertIn('if (library == null) return false;', host)
+        self.assertNotIn('private final long frame = symbol(', host)
+
     def test_nested_libraries_of_another_minecraft_line_are_skipped(self):
         """TouchController bundles one Jar per line; only the target line may be validated."""
         satisfies = prepare_fabric_aot.nested_targets_version
