@@ -12,6 +12,15 @@ GAME_SYMBOLS = (
     "_PlayDiagnostics_dumpThreads_",
 )
 DIAGNOSTIC_MARKERS = ("tickStallSeconds", "client_tick_stall", "handlerActive")
+# The touch path can be pruned without any build error: an init that never installs a host
+# leaves a null field, and the closed world folds every later read to a miss. These markers
+# are the strings that only survive when the bridge, the frame hook and the Mod's load flag
+# are all still present, so a silent prune fails the build instead of shipping dead input.
+TOUCH_MARKERS = (
+    "mcfao.aot.TouchHost",
+    "mcfao.aot.IosTransport",
+    "[TouchBridge] host installed",
+)
 
 
 def verify_game_image(path: Path) -> dict:
@@ -21,7 +30,10 @@ def verify_game_image(path: Path) -> dict:
     with path.open("rb") as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
         missing += [text for text in DIAGNOSTIC_MARKERS
                     if data.find(text.encode()) < 0 and data.find(text.encode("utf-16-le")) < 0]
+        missing += [text for text in TOUCH_MARKERS
+                    if data.find(text.encode()) < 0 and data.find(text.encode("utf-16-le")) < 0]
     if missing:
         raise ValueError(f"AOT game code or current diagnostics absent from {path}: {missing}")
     return {"status": "GAME_CODE_PRESENT", "symbols": list(GAME_SYMBOLS),
-            "markers": list(DIAGNOSTIC_MARKERS), "deviceRun": "NOT RUN"}
+            "markers": list(DIAGNOSTIC_MARKERS), "touchMarkers": list(TOUCH_MARKERS),
+            "deviceRun": "NOT RUN"}

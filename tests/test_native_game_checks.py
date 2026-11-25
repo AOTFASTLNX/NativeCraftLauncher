@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from bootstrap_toolchain import sha256
 from capture import ROOT
 from graphics_common import verify_gl41_bridge
-from native_game_checks import DIAGNOSTIC_MARKERS, GAME_SYMBOLS, verify_game_image
+from native_game_checks import DIAGNOSTIC_MARKERS, GAME_SYMBOLS, TOUCH_MARKERS, verify_game_image
 
 
 class NativeGameChecks(unittest.TestCase):
@@ -34,9 +34,18 @@ class NativeGameChecks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             image = Path(temp) / "image"
             for encoding in ("utf-8", "utf-16-le"):
-                image.write_bytes(" ".join(DIAGNOSTIC_MARKERS).encode(encoding))
+                image.write_bytes(" ".join(DIAGNOSTIC_MARKERS + TOUCH_MARKERS).encode(encoding))
                 with patch("native_game_checks.subprocess.run", return_value=subprocess.CompletedProcess([], 0, stdout=" ".join(GAME_SYMBOLS))):
                     self.assertEqual(verify_game_image(image)["status"], "GAME_CODE_PRESENT")
+
+    def test_image_without_the_touch_bridge_is_rejected(self):
+        """A pruned TouchHost produced a valid build and silently dead input."""
+        with tempfile.TemporaryDirectory() as temp:
+            image = Path(temp) / "image"
+            image.write_bytes(" ".join(DIAGNOSTIC_MARKERS).encode())
+            with patch("native_game_checks.subprocess.run", return_value=subprocess.CompletedProcess([], 0, stdout=" ".join(GAME_SYMBOLS))):
+                with self.assertRaisesRegex(ValueError, "TouchHost"):
+                    verify_game_image(image)
 
     def test_historical_bridge_report_requires_current_gl41_sources(self):
         with tempfile.TemporaryDirectory() as temp:
