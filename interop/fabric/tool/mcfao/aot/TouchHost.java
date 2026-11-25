@@ -66,9 +66,11 @@ public final class TouchHost implements IosTransport.Host {
             return top.fifthlight.touchcontroller.common.config.holder.GlobalConfigHolder.INSTANCE
                     .getConfig().getValue().getStatus().getStatus()
                     != top.fifthlight.touchcontroller.common.config.data.StatusConfig.Status.DISABLED;
-        } catch (RuntimeException unavailable) {
+        } catch (RuntimeException | LinkageError unavailable) {
             // A fresh install has no config file yet; keeping the bridge active matches the Mod's
-            // own default, which is enabled.
+            // own default, which is enabled. A LinkageError covers a failed static initializer:
+            // the holder resolves the sandbox config directory, and on iOS that can fail, which
+            // surfaces as ExceptionInInitializerError rather than a RuntimeException.
             return true;
         }
     }

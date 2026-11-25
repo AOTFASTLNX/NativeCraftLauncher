@@ -72,6 +72,17 @@ class TouchControllerTransportTests(unittest.TestCase):
         self.assertIn('void faot_surface_vibrate(int kind)', surface)
         self.assertIn('UIImpactFeedbackGenerator', surface)
 
+    def test_a_failed_config_initializer_keeps_the_bridge_enabled(self):
+        """The Mod's config holder resolves a sandbox directory during class init.
+
+        When that throws, the JVM raises ExceptionInInitializerError, which is a LinkageError
+        rather than a RuntimeException. Catching only RuntimeException would let the failure
+        escape the constructor, leave the host uninstalled, and silently kill input.
+        """
+        host = (ROOT / 'interop/fabric/tool/mcfao/aot/TouchHost.java').read_text()
+        self.assertIn('catch (RuntimeException | LinkageError unavailable)', host)
+        self.assertIn('return true;', host)
+
     def test_nested_libraries_of_another_minecraft_line_are_skipped(self):
         """TouchController bundles one Jar per line; only the target line may be validated."""
         satisfies = prepare_fabric_aot.nested_targets_version
