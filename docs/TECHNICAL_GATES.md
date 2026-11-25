@@ -22,6 +22,8 @@
 | D2 签名与安装 | Xcode Personal Team 免费签名与 IPA 生成分别验证 | 设备安装可运行，7 天过期/重装/数据迁移有明确处理 | 若仅可直接安装不能生成 IPA，必须如实写 BLOCKED |
 | E 性能/稳定性 | 指定 iPhone、场景、画质、视距、30min 持续实验 | 记录每帧/GC/RSS/温度/降频与负载 | 无门槛数据不称“高性能终版” |
 
+2026-11-25。iPhone（iPhone19,4）真机运行 `recollection3-touch-input-r16-20261125`：TouchController 入口点加载、配置读取成功、`[TouchBridge] host installed`、`Preparing spawn area` 与 `Dev joined the game` 均出现在设备自身日志中，无段错误；用户确认可玩。据 [C0 触控真机记录](C0_TOUCH_DEVICE_20261125.md)，C0 与 C0a 的启动/首帧证据已成立，C0b 的主菜单触摸响应由用户操作确认。C0c 的完整可玩性复核（破坏放置、退出重入、存档保留）与 E 的性能统计仍未测，C0c 与 E 保持未通过。
+
 2026-11-09。原版 26.1.2 单人在模拟器通过菜单、创建世界、转视角、移动、跳跃、取放和破坏方块、物品栏及保存重进。横屏方案已实测 2622×1206。G4 的 60 种程序已预编译，87 条原版管线通过 GPU 测试。CoreAudio PCM 探针通过，原版声音引擎启动。正式 C0/C0a 保持 BLOCKED，真机 C1/C2、整合包与性能仍待验收。详见 [图形证据](GRAPHICS_BOOTSTRAP.md)。
 
 ## 必须先做的 ADR
